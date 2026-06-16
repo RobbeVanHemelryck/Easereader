@@ -343,15 +343,14 @@ app.get('/api/senders', (req, res) => {
 });
 
 app.post('/api/senders', (req, res) => {
-  const { label, host, port, secure, user, password } = req.body;
-  if (!label || !user) return res.status(400).json({ error: 'label and user are required' });
+  const { host, port, secure, user, password } = req.body;
+  if (!user) return res.status(400).json({ error: 'user is required' });
   if (!host || !password) return res.status(400).json({ error: 'host and password required for SMTP' });
 
   const senders = readJSON(SENDERS_FILE);
   const sender = {
     id: uuidv4(),
     type: 'smtp',
-    label,
     user,
     host,
     port: port || 587,
@@ -373,8 +372,8 @@ app.put('/api/senders/:id', (req, res) => {
   // Never let the client blank out a stored secret with the mask
   SENSITIVE.forEach(k => { if (update[k] === '••••••') delete update[k]; });
   const next = { ...senders[idx], ...update, id: senders[idx].id, type: 'smtp' };
-  if (!next.label || !next.user || !next.host || !next.password) {
-    return res.status(400).json({ error: 'label, user, host and password are required' });
+  if (!next.user || !next.host || !next.password) {
+    return res.status(400).json({ error: 'user, host and password are required' });
   }
   senders[idx] = next;
   writeJSON(SENDERS_FILE, senders);
@@ -408,7 +407,7 @@ app.post('/api/senders/:id/test', async (req, res) => {
       from:    `"Ebook Search" <${sender.user}>`,
       to:      destEmail,
       subject: `Test from ${sender.user}`,
-      text:    `This is a test email from the Ebook Search app.\nSender: ${sender.label} (SMTP)`,
+      text:    `This is a test email from the Ebook Search app.\nSender: ${sender.user} (SMTP)`,
     });
     res.json({ ok: true });
   } catch (err) {
@@ -426,7 +425,7 @@ app.get('/api/profiles', (req, res) => {
   const senders  = readJSON(SENDERS_FILE);
   res.json(profiles.map(p => ({
     ...p,
-    senderLabel: senders.find(s => s.id === p.senderId)?.label || '(deleted)',
+    senderLabel: senders.find(s => s.id === p.senderId)?.user || '(deleted)',
   })));
 });
 
@@ -448,7 +447,7 @@ app.post('/api/profiles', upload.single('image'), (req, res) => {
   };
   profiles.push(profile);
   writeJSON(PROFILES_FILE, profiles);
-  const senderLabel = senders.find(s => s.id === senderId)?.label || '';
+  const senderLabel = senders.find(s => s.id === senderId)?.user || '';
   res.json({ ...profile, senderLabel });
 });
 
@@ -475,7 +474,7 @@ app.put('/api/profiles/:id', upload.single('image'), (req, res) => {
   };
   writeJSON(PROFILES_FILE, profiles);
   const senders = readJSON(SENDERS_FILE);
-  res.json({ ...profiles[idx], senderLabel: senders.find(s => s.id === profiles[idx].senderId)?.label || '' });
+  res.json({ ...profiles[idx], senderLabel: senders.find(s => s.id === profiles[idx].senderId)?.user || '' });
 });
 
 app.delete('/api/profiles/:id', (req, res) => {
@@ -511,7 +510,7 @@ app.post('/api/send', async (req, res) => {
   const safeName = (title || 'ebook').replace(/[^\w\s\-()']/g, '').trim().replace(/\s+/g, '_').substring(0, 100) || 'ebook';
 
   try {
-    console.log(`Sending "${safeName}.epub" to ${profile.destEmail} via ${sender.label}…`);
+    console.log(`Sending "${safeName}.epub" to ${profile.destEmail} via ${sender.user}…`);
     const download  = await downloadToBuffer(dl, title || '');
     const buffer    = download.buffer;
 
