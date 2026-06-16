@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ebook Search</title>
+  <style>
+    /* ── Reset ──────────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f2f2f2; color: #333; min-height: 100vh; }
+
+    /* ── Header ─────────────────────────────────────────────────────────────── */
+    #hero {
+      background: #fff; border-bottom: 1px solid #e0e0e0;
+      padding: 1.4rem 1rem; display: flex; flex-direction: column; align-items: center; gap: 1rem;
+      position: relative;
+    }
+    #hero h1 { font-size: 1.6rem; font-weight: 700; color: #222; letter-spacing: -0.3px; transition: font-size 0.2s; }
+    #hero.compact h1 { font-size: 1.15rem; }
+
+    #search-form { display: flex; width: 100%; max-width: 640px; gap: 0.4rem; }
+    #search-input {
+      flex: 1; padding: 0.65rem 1rem; font-size: 1rem;
+      border: 1px solid #ccc; border-radius: 6px; outline: none; background: #fafafa;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    #search-input:focus { border-color: #2878c3; box-shadow: 0 0 0 3px rgba(40,120,195,0.12); background: #fff; }
+    #search-btn {
+      padding: 0.65rem 1.4rem; font-size: 0.95rem; font-weight: 600;
+      background: #2878c3; color: #fff; border: none; border-radius: 6px;
+      cursor: pointer; transition: background 0.2s; white-space: nowrap;
+    }
+    #search-btn:hover { background: #1c5fa0; }
+    #search-btn:disabled { background: #8eb8e0; cursor: not-allowed; }
+
+    #settings-btn {
+      position: absolute; right: 1rem; top: 50%; transform: translateY(-50%);
+      background: none; border: 1px solid #e0e0e0; border-radius: 6px;
+      color: #666; font-size: 1.1rem; padding: 0.35rem 0.6rem;
+      cursor: pointer; transition: background 0.15s, color 0.15s;
+    }
+    #settings-btn:hover { background: #f0f0f0; color: #333; }
+
+    /* ── Status ─────────────────────────────────────────────────────────────── */
+    #status { text-align: center; padding: 1.5rem; color: #666; font-size: 0.93rem; }
+    #status.error { color: #c0392b; }
+
+    /* ── Results ─────────────────────────────────────────────────────────────── */
+    #results { max-width: 900px; margin: 1.2rem auto 3rem; padding: 0 1rem; display: flex; flex-direction: column; gap: 0; }
+
+    .book-row {
+      background: #fff; border: 1px solid #e0e0e0; border-bottom: none;
+      display: flex; align-items: flex-start; gap: 1rem; padding: 1rem;
+      cursor: pointer; position: relative; transition: background 0.15s;
+    }
+    .book-row:first-child { border-radius: 6px 6px 0 0; }
+    .book-row:last-child  { border-bottom: 1px solid #e0e0e0; border-radius: 0 0 6px 6px; }
+    .book-row:first-child:last-child { border-radius: 6px; border-bottom: 1px solid #e0e0e0; }
+    .book-row:hover { background: #f7faff; }
+    .book-row.downloading { pointer-events: none; opacity: 0.6; }
+    .book-row.downloading::after {
+      content: '\2193 Downloading\2026'; position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.9rem; font-weight: 600; color: #2878c3;
+      background: rgba(255,255,255,0.6); border-radius: inherit;
+    }
+
+    .book-cover { flex-shrink: 0; width: 68px; height: 90px; object-fit: cover; border: 1px solid #ddd; border-radius: 3px; background: #eee; }
+    .book-cover-placeholder {
+      flex-shrink: 0; width: 68px; height: 90px; background: #e8e8e8;
+      border: 1px solid #ddd; border-radius: 3px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.6rem; color: #bbb;
+    }
+
+    .book-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.18rem; }
+    .book-title { font-size: 1rem; font-weight: 600; color: #2878c3; text-decoration: underline; line-height: 1.3; word-break: break-word; }
+    .book-row:hover .book-title { color: #1c5fa0; }
+    .book-publisher { font-size: 0.82rem; color: #555; }
+    .book-author { font-size: 0.87rem; color: #2878c3; font-style: italic; }
+    .book-meta { margin-top: auto; padding-top: 0.55rem; display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; font-size: 0.8rem; color: #666; }
+    .book-meta span { white-space: nowrap; }
+    .book-meta strong { color: #333; font-weight: 600; }
+    .book-rating { display: flex; align-items: center; gap: 0.25rem; margin-left: auto; flex-shrink: 0; }
+    .star-icon { color: #e8a010; font-size: 0.9rem; }
+    .star-icon.empty { color: #ccc; }
+    .rating-text { font-size: 0.8rem; color: #888; white-space: nowrap; }
+
+    /* ── Book actions column ────────────────────────────────────────────────── */
+    .book-actions {
+      flex-shrink: 0; display: flex; flex-direction: column;
+      align-items: flex-end; gap: 0.5rem; padding-top: 0.1rem; min-width: 36px;
+    }
+    .open-link {
+      display: flex; align-items: center; justify-content: center;
+      width: 28px; height: 28px; border-radius: 50%; color: #aaa;
+      font-size: 1rem; text-decoration: none;
+      transition: background 0.15s, color 0.15s;
+    }
+    .open-link:hover { background: #f0f0f0; color: #2878c3; }
+    .profile-btns { display: flex; gap: 0.3rem; flex-wrap: wrap; justify-content: flex-end; }
+
+    .profile-btn {
+      position: relative; width: 34px; height: 34px; border-radius: 50%;
+      border: 2px solid #e0e0e0; background: #fafafa;
+      cursor: pointer; overflow: hidden; padding: 0;
+      transition: border-color 0.15s, transform 0.1s; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .profile-btn:hover { border-color: #2878c3; transform: scale(1.08); }
+    .profile-btn.sending { opacity: 0.5; pointer-events: none; }
+    .profile-btn.sent    { border-color: #27ae60; }
+    .profile-btn.failed  { border-color: #e74c3c; }
+    .profile-btn img { width: 100%; height: 100%; object-fit: cover; }
+    .profile-btn .avatar-initials {
+      width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; font-weight: 700; color: #fff; border-radius: 50%;
+    }
+    .profile-btn::after {
+      content: attr(data-tip);
+      position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+      background: #222; color: #fff; font-size: 0.7rem; white-space: nowrap;
+      padding: 3px 7px; border-radius: 4px; pointer-events: none;
+      opacity: 0; transition: opacity 0.15s; z-index: 10;
+    }
+    .profile-btn:hover::after { opacity: 1; }
+    .profile-btn .btn-status {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      font-size: 0.8rem; background: rgba(255,255,255,0.88); border-radius: 50%;
+      opacity: 0; pointer-events: none; transition: opacity 0.15s;
+    }
+    .profile-btn.sending .btn-status, .profile-btn.sent .btn-status, .profile-btn.failed .btn-status { opacity: 1; }
+
+    /* ── Spinner ─────────────────────────────────────────────────────────────── */
+    .spinner {
+      display: inline-block; width: 12px; height: 12px;
+      border: 2px solid #ddd; border-top-color: #2878c3;
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+    }
+    .spinner-lg {
+      display: inline-block; width: 16px; height: 16px;
+      border: 2px solid #ddd; border-top-color: #2878c3;
+      border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 0.4rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+       SETTINGS PANEL
+    ═══════════════════════════════════════════════════════════════════════ */
+    #settings-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+      z-index: 100; display: none; align-items: flex-start; justify-content: flex-end;
+    }
+    #settings-overlay.open { display: flex; }
+    #settings-panel {
+      background: #fff; width: 480px; max-width: 100vw; height: 100vh;
+      overflow-y: auto; box-shadow: -4px 0 24px rgba(0,0,0,0.18);
+      display: flex; flex-direction: column;
+    }
+    .panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1.1rem 1.3rem; border-bottom: 1px solid #e8e8e8; flex-shrink: 0;
+    }
+    .panel-header h2 { font-size: 1.1rem; font-weight: 700; }
+    .panel-close {
+      background: none; border: none; font-size: 1.4rem; color: #888;
+      cursor: pointer; line-height: 1; padding: 0 0.2rem;
+    }
+    .panel-close:hover { color: #333; }
+
+    .panel-tabs { display: flex; border-bottom: 1px solid #e8e8e8; flex-shrink: 0; }
+    .panel-tab {
+      flex: 1; padding: 0.75rem; font-size: 0.9rem; font-weight: 600;
+      background: none; border: none; cursor: pointer; color: #888;
+      border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s;
+    }
+    .panel-tab.active { color: #2878c3; border-bottom-color: #2878c3; }
+
+    .panel-pane { padding: 1.2rem; display: none; flex-direction: column; gap: 1rem; }
+    .panel-pane.active { display: flex; }
+
+    .panel-section-title { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #999; margin-bottom: 0.3rem; }
+
+    .item-list { display: flex; flex-direction: column; gap: 0.5rem; }
+    .item-card {
+      display: flex; align-items: center; gap: 0.75rem;
+      background: #f8f8f8; border: 1px solid #e8e8e8; border-radius: 8px; padding: 0.7rem 0.9rem;
+    }
+    .item-card .item-info { flex: 1; min-width: 0; }
+    .item-card .item-name { font-size: 0.9rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+    .item-card .item-sub  { font-size: 0.78rem; color: #888; margin-top: 0.1rem; }
+    .item-card .item-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+
+    .type-badge { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.04em; }
+    .type-badge.smtp  { background: #e3f2fd; color: #1565c0; }
+    .auth-status { font-size: 0.72rem; font-weight: 600; margin-top: 0.15rem; }
+    .auth-status.ok  { color: #27ae60; }
+    .auth-status.nok { color: #e74c3c; }
+
+    .profile-avatar { width: 38px; height: 38px; border-radius: 50%; overflow: hidden; border: 1px solid #ddd; flex-shrink: 0; }
+    .profile-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .profile-avatar .avatar-initials {
+      width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem; font-weight: 700; color: #fff;
+    }
+
+    .panel-form { display: flex; flex-direction: column; gap: 0.7rem; background: #f8f8f8; border: 1px solid #e8e8e8; border-radius: 8px; padding: 1rem; }
+    .form-row { display: flex; flex-direction: column; gap: 0.3rem; }
+    .form-row label { font-size: 0.8rem; font-weight: 600; color: #555; }
+    .form-row input[type="text"], .form-row input[type="email"], .form-row input[type="password"], .form-row input[type="number"], .form-row select {
+      padding: 0.5rem 0.7rem; font-size: 0.9rem; border: 1px solid #ddd;
+      border-radius: 6px; outline: none; background: #fff; transition: border-color 0.2s;
+    }
+    .form-row input:focus, .form-row select:focus { border-color: #2878c3; }
+
+    .form-row-inline { display: flex; gap: 0.5rem; align-items: flex-end; }
+    .smtp-fields { display: flex; flex-direction: column; gap: 0.7rem; }
+    .provider-presets { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .provider-preset {
+      background: #fff;
+      border: 1px solid #d9d9d9;
+      border-radius: 999px;
+      padding: 0.3rem 0.65rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #4a4a4a;
+      cursor: pointer;
+    }
+    .provider-preset:hover { background: #f2f7fc; border-color: #bfd8ef; }
+    .provider-preset.active { background: #eaf4fd; border-color: #2878c3; color: #1f5e98; }
+
+    .btn { padding: 0.5rem 1rem; font-size: 0.88rem; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; transition: background 0.15s; white-space: nowrap; }
+    .btn-primary   { background: #2878c3; color: #fff; }
+    .btn-primary:hover { background: #1c5fa0; }
+    .btn-secondary { background: #f0f0f0; color: #333; border: 1px solid #ddd; }
+    .btn-secondary:hover { background: #e4e4e4; }
+    .btn-danger    { background: #fce4ec; color: #c62828; border: 1px solid #f5c6cb; }
+    .btn-danger:hover { background: #f8b4c0; }
+    .btn-sm { padding: 0.3rem 0.7rem; font-size: 0.8rem; }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    .image-preview-wrap { display: flex; align-items: center; gap: 0.75rem; }
+    .image-preview { width: 52px; height: 52px; border-radius: 50%; overflow: hidden; border: 2px solid #e0e0e0; background: #eee; }
+    .image-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .image-preview .avatar-initials { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 1rem; font-weight: 700; color: #fff; }
+
+    .help-text { font-size: 0.75rem; color: #888; line-height: 1.5; }
+    .help-text code { background: #eee; padding: 1px 4px; border-radius: 3px; font-size: 0.72rem; }
+
+    /* Notification toast */
+    #toast {
+      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+      background: #222; color: #fff; padding: 0.6rem 1.2rem; border-radius: 8px;
+      font-size: 0.88rem; z-index: 200; opacity: 0; transition: opacity 0.25s; pointer-events: none;
+      white-space: nowrap;
+    }
+    #toast.show { opacity: 1; }
+    #toast.success { background: #27ae60; }
+    #toast.error   { background: #c0392b; }
+
+    #send-error-panel {
+      position: fixed;
+      right: 1rem;
+      bottom: 1rem;
+      max-width: 420px;
+      background: #fff;
+      border: 1px solid #f0c7c7;
+      border-left: 4px solid #c0392b;
+      border-radius: 8px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.14);
+      padding: 0.8rem 0.9rem;
+      z-index: 220;
+    }
+    #send-error-text { font-size: 0.85rem; color: #8e2b22; line-height: 1.35; }
+    #send-error-actions { margin-top: 0.6rem; display: flex; gap: 0.45rem; justify-content: flex-end; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────────── -->
+<div id="hero">
+  <h1>Ebook Search</h1>
+  <form id="search-form" autocomplete="off">
+    <input id="search-input" type="text" placeholder="Search for a title, author, ISBN…" autofocus />
+    <button id="search-btn" type="submit">Search</button>
+  </form>
+  <button id="settings-btn" title="Settings">⚙</button>
+</div>
+
+<div id="status" hidden></div>
+<div id="results"></div>
+<div id="toast"></div>
+<div id="send-error-panel" style="display:none">
+  <div id="send-error-text"></div>
+  <div id="send-error-actions">
+    <button class="btn btn-secondary btn-sm" id="send-error-view" style="display:none">View HTML</button>
+    <button class="btn btn-secondary btn-sm" id="send-error-close">Dismiss</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SETTINGS OVERLAY
+═══════════════════════════════════════════════════════════════════════ -->
+<div id="settings-overlay">
+  <div id="settings-panel">
+    <div class="panel-header">
+      <h2>Settings</h2>
+      <button class="panel-close" id="settings-close">&#10005;</button>
+    </div>
+
+    <div class="panel-tabs">
+      <button class="panel-tab active" data-tab="senders">Senders</button>
+      <button class="panel-tab" data-tab="profiles">Profiles</button>
+    </div>
+
+    <!-- ── SENDERS PANE ─────────────────────────────────────────────────── -->
+    <div class="panel-pane active" id="pane-senders">
+      <div>
+        <div class="panel-section-title">Existing senders</div>
+        <div class="item-list" id="senders-list"></div>
+      </div>
+      <div>
+        <div class="panel-section-title">Add sender</div>
+        <div class="panel-form">
+          <div class="form-row">
+            <label>Label</label>
+            <input id="sf-label" type="text" placeholder="My email account" />
+          </div>
+          <div class="form-row">
+            <label>Quick provider presets</label>
+            <div class="provider-presets" id="sf-provider-presets"></div>
+            <div class="help-text" id="sf-provider-hint">Select a provider to prefill SMTP host, port, and TLS settings.</div>
+          </div>
+          <div class="form-row">
+            <label>From email address</label>
+            <input id="sf-user" type="email" placeholder="you@gmail.com" />
+          </div>
+          <!-- SMTP fields -->
+          <div class="smtp-fields" id="sf-smtp-fields">
+            <div class="form-row">
+              <label>SMTP Host</label>
+              <input id="sf-host" type="text" placeholder="smtp.example.com" />
+            </div>
+            <div class="form-row-inline">
+              <div class="form-row" style="flex:1">
+                <label>Port</label>
+                <input id="sf-port" type="number" value="587" min="1" max="65535" />
+              </div>
+              <div class="form-row" style="flex:1">
+                <label><input id="sf-secure" type="checkbox" /> Use TLS (port 465)</label>
+              </div>
+            </div>
+            <div class="form-row">
+              <label>Password</label>
+              <input id="sf-password" type="password" placeholder="••••••••" />
+            </div>
+            <div class="help-text" id="sf-google-password-help" style="display:none">(App password, click <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer">here</a> to create one)</div>
+          </div>
+          <button class="btn btn-primary" id="sf-submit">Add sender</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PROFILES PANE ────────────────────────────────────────────────── -->
+    <div class="panel-pane" id="pane-profiles">
+      <div>
+        <div class="panel-section-title">Existing profiles</div>
+        <div class="item-list" id="profiles-list"></div>
+      </div>
+      <div>
+        <div class="panel-section-title">Add profile</div>
+        <div class="panel-form">
+          <div class="form-row">
+            <label>Name</label>
+            <input id="pf-name" type="text" placeholder="My Kindle" />
+          </div>
+          <div class="form-row">
+            <label>Destination email</label>
+            <input id="pf-dest" type="email" placeholder="yourdevice@kindle.com" />
+          </div>
+          <div class="form-row">
+            <label>Sender</label>
+            <select id="pf-sender"></select>
+          </div>
+          <div class="form-row">
+            <label>Profile image (optional — auto-avatar if none)</label>
+            <div class="image-preview-wrap">
+              <div class="image-preview" id="pf-preview">
+                <div class="avatar-initials" id="pf-initials-preview" style="background:#ccc">?</div>
+              </div>
+              <input id="pf-image" type="file" accept="image/*" />
+            </div>
+          </div>
+          <button class="btn btn-primary" id="pf-submit">Add profile</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════════════════════════════════════ -->
+<script>
+/* ─── Utilities ─────────────────────────────────────────────────────────── */
+function esc(str) {
+  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+let _toastTimer;
+function toast(msg, type = '') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show' + (type ? ' ' + type : '');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.className = ''; }, 3500);
+}
+
+function showSendError(msg, htmlPreviewId = null) {
+  const panel = document.getElementById('send-error-panel');
+  const text  = document.getElementById('send-error-text');
+  const view  = document.getElementById('send-error-view');
+  text.textContent = msg;
+  if (htmlPreviewId) {
+    view.style.display = '';
+    view.onclick = () => {
+      window.open('/api/debug/html/' + encodeURIComponent(htmlPreviewId), '_blank', 'noopener,noreferrer');
+    };
+  } else {
+    view.style.display = 'none';
+    view.onclick = null;
+  }
+  panel.style.display = '';
+}
+
+document.getElementById('send-error-close').addEventListener('click', () => {
+  document.getElementById('send-error-panel').style.display = 'none';
+});
+
+const AVATAR_COLORS = ['#e74c3c','#e67e22','#f39c12','#2ecc71','#1abc9c','#3498db','#9b59b6','#e91e63','#00bcd4','#4caf50'];
+function avatarColor(name) {
+  let h = 0;
+  for (let i = 0; i < (name||'').length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffffffff;
+  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+}
+function initials(name) {
+  return (name || '?').split(/\s+/).map(w => w[0]).join('').toUpperCase().substring(0, 2) || '?';
+}
+function avatarHtml(profile) {
+  if (profile.imagePath) return `<img src="${esc(profile.imagePath)}" alt="" />`;
+  const bg = avatarColor(profile.name || '');
+  return `<div class="avatar-initials" style="background:${bg}">${esc(initials(profile.name))}</div>`;
+}
+
+/* ─── State ─────────────────────────────────────────────────────────────── */
+let allProfiles = [];
+let allSenders  = [];
+let selectedProviderPreset = 'custom';
+
+const SMTP_PROVIDER_PRESETS = {
+  custom:   { label: 'Custom', host: '',                        port: 587, secure: false },
+  google:   { label: 'Google', host: 'smtp.gmail.com',         port: 465, secure: true  },
+  outlook:  { label: 'Outlook', host: 'smtp-mail.outlook.com', port: 587, secure: false },
+  yahoo:    { label: 'Yahoo', host: 'smtp.mail.yahoo.com',     port: 465, secure: true  },
+  icloud:   { label: 'iCloud', host: 'smtp.mail.me.com',       port: 587, secure: false },
+  zoho:     { label: 'Zoho', host: 'smtp.zoho.com',            port: 465, secure: true  },
+  fastmail: { label: 'Fastmail', host: 'smtp.fastmail.com',    port: 465, secure: true  },
+};
+
+async function loadProfiles() {
+  const r = await fetch('/api/profiles');
+  allProfiles = await r.json();
+}
+async function loadSenders() {
+  const r = await fetch('/api/senders');
+  allSenders = await r.json();
+}
+
+/* ─── Search ─────────────────────────────────────────────────────────────── */
+const form      = document.getElementById('search-form');
+const inputEl   = document.getElementById('search-input');
+const searchBtn = document.getElementById('search-btn');
+const hero      = document.getElementById('hero');
+const statusEl  = document.getElementById('status');
+const resultsEl = document.getElementById('results');
+
+function setStatus(msg, isError = false) {
+  statusEl.hidden    = !msg;
+  statusEl.innerHTML = msg;
+  statusEl.className = isError ? 'error' : '';
+}
+
+function ratingStars(rating, quality) {
+  const r = parseFloat(rating) || 0, q = parseFloat(quality) || 0;
+  if (r === 0 && q === 0) return '';
+  return `<div class="book-rating"><span class="${r>0?'star-icon':'star-icon empty'}">${r>=1?'&#9733;':'&#9734;'}</span><span class="rating-text">${r.toFixed(1)} / ${q.toFixed(1)}</span></div>`;
+}
+
+function buildProfileBtns(dl, title) {
+  if (!allProfiles.length) return '';
+  const btns = allProfiles.map(p => {
+    const tip = `Send to ${p.name}`;
+    return `<button class="profile-btn" data-tip="${esc(tip)}" data-dl="${esc(dl)}" data-title="${esc(title)}" data-pid="${esc(p.id)}" onclick="sendToProfile(event,this)" title="${esc(tip)}">${avatarHtml(p)}<div class="btn-status"></div></button>`;
+  }).join('');
+  return `<div class="profile-btns">${btns}</div>`;
+}
+
+function renderResults(results) {
+  if (!results.length) { setStatus('No EPUB results found.'); resultsEl.innerHTML = ''; return; }
+  setStatus('');
+  resultsEl.innerHTML = results.map(r => {
+    const dlUrl = r.dl ? `/api/download?dl=${encodeURIComponent(r.dl)}&title=${encodeURIComponent(r.title)}` : '';
+    const cover = r.cover ? `<img class="book-cover" src="${esc(r.cover)}" alt="" loading="lazy" />` : `<div class="book-cover-placeholder">&#128218;</div>`;
+    const metaParts = [];
+    if (r.year && r.year !== '0') metaParts.push(`Year: <strong>${esc(r.year)}</strong>`);
+    if (r.language) metaParts.push(`Language: <strong>${esc(r.language)}</strong>`);
+    if (r.filesize) metaParts.push(`File: <strong>${esc((r.extension||'').toUpperCase())}, ${esc(r.filesize)}</strong>`);
+    return `<div class="book-row" data-dl="${esc(dlUrl)}" data-url="${esc(r.url)}" onclick="triggerDownload(this)">
+      ${cover}
+      <div class="book-info">
+        <div class="book-title">${esc(r.title)}</div>
+        ${r.publisher?`<div class="book-publisher">${esc(r.publisher)}</div>`:''}
+        ${r.author?`<div class="book-author">${esc(r.author)}</div>`:''}
+        <div class="book-meta">${metaParts.map(p=>`<span>${p}</span>`).join('')}${ratingStars(r.rating,r.quality)}</div>
+      </div>
+      <div class="book-actions">
+        <a class="open-link" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer" title="Open on Z-Library" onclick="event.stopPropagation()">&#8599;</a>
+        ${buildProfileBtns(r.dl, r.title)}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderProfileBtnsAll() {
+  document.querySelectorAll('.book-row').forEach(row => {
+    const actionsEl = row.querySelector('.book-actions');
+    if (!actionsEl) return;
+    const old = actionsEl.querySelector('.profile-btns');
+    if (old) old.remove();
+    if (!allProfiles.length) return;
+    const dlRaw  = row.querySelector('.book-actions')?.closest('.book-row')?.dataset.dl || '';
+    let dl = '';
+    try { dl = new URL(dlRaw, location.origin).searchParams.get('dl') || ''; } catch(e) {}
+    const title = row.querySelector('.book-title')?.textContent || '';
+    const wrap = document.createElement('div');
+    wrap.className = 'profile-btns';
+    allProfiles.forEach(p => {
+      const tip = `Send to ${p.name}`;
+      const b = document.createElement('button');
+      b.className = 'profile-btn';
+      b.dataset.tip   = tip;
+      b.dataset.dl    = dl;
+      b.dataset.title = title;
+      b.dataset.pid   = p.id;
+      b.title = tip;
+      b.setAttribute('onclick', 'sendToProfile(event,this)');
+      b.innerHTML = avatarHtml(p) + '<div class="btn-status"></div>';
+      wrap.appendChild(b);
+    });
+    actionsEl.appendChild(wrap);
+  });
+}
+
+function triggerDownload(row) {
+  const dlUrl = row.dataset.dl;
+  if (!dlUrl) { window.open(row.dataset.url, '_blank', 'noopener,noreferrer'); return; }
+  row.classList.add('downloading');
+  const a = document.createElement('a');
+  a.href = dlUrl;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => row.classList.remove('downloading'), 4000);
+}
+
+async function sendToProfile(evt, btnEl) {
+  evt.stopPropagation();
+  const dl = btnEl.dataset.dl, title = btnEl.dataset.title, profileId = btnEl.dataset.pid;
+  const statusDiv = btnEl.querySelector('.btn-status');
+  btnEl.classList.add('sending');
+  statusDiv.innerHTML = '<span class="spinner"></span>';
+  try {
+    const res  = await fetch('/api/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ dl, title, profileId }) });
+    let data = {};
+    try { data = await res.json(); } catch (e) {}
+    if (!res.ok || data.error) {
+      const err = new Error(data.error || 'Send failed');
+      err.htmlPreviewId = data.htmlPreviewId || null;
+      throw err;
+    }
+    btnEl.classList.remove('sending'); btnEl.classList.add('sent');
+    statusDiv.innerHTML = '&#10003;';
+    const pName = allProfiles.find(p => p.id === profileId)?.name || 'profile';
+    toast(`Sent to ${pName}!`, 'success');
+    setTimeout(() => { btnEl.classList.remove('sent'); statusDiv.innerHTML = ''; }, 3000);
+  } catch (err) {
+    btnEl.classList.remove('sending'); btnEl.classList.add('failed');
+    statusDiv.innerHTML = '&#10007;';
+    showSendError('Failed: ' + err.message, err.htmlPreviewId || null);
+    toast('Failed: ' + err.message, 'error');
+    setTimeout(() => { btnEl.classList.remove('failed'); statusDiv.innerHTML = ''; }, 4000);
+  }
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = inputEl.value.trim();
+  if (!q) return;
+  hero.classList.add('compact');
+  searchBtn.disabled = true;
+  resultsEl.innerHTML = '';
+  statusEl.innerHTML = '<span class="spinner-lg"></span>Searching\u2026';
+  statusEl.hidden = false; statusEl.className = '';
+  try {
+    const res  = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderResults(data.results || []);
+  } catch (err) {
+    setStatus('Error: ' + err.message, true);
+    resultsEl.innerHTML = '';
+  } finally {
+    searchBtn.disabled = false;
+  }
+});
+
+/* ─── Settings panel ─────────────────────────────────────────────────────── */
+const overlay = document.getElementById('settings-overlay');
+document.getElementById('settings-btn').addEventListener('click', () => { overlay.classList.add('open'); refreshSettings(); });
+document.getElementById('settings-close').addEventListener('click', () => overlay.classList.remove('open'));
+overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('open'); });
+
+document.querySelectorAll('.panel-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.panel-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel-pane').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+async function refreshSettings() {
+  await loadSenders();
+  await loadProfiles();
+  renderSendersList();
+  renderProfilesList();
+  populateSenderDropdown();
+}
+
+/* ─── Senders ────────────────────────────────────────────────────────────── */
+function renderSendersList() {
+  const list = document.getElementById('senders-list');
+  if (!allSenders.length) { list.innerHTML = '<div style="font-size:0.85rem;color:#aaa;padding:0.3rem 0">No senders yet.</div>'; return; }
+  list.innerHTML = allSenders.map(s => {
+    return `<div class="item-card">
+      <div class="item-info">
+        <div class="item-name"><span class="type-badge smtp">SMTP</span>${esc(s.label)}</div>
+        <div class="item-sub">${esc(s.user)}</div>
+      </div>
+      <div class="item-actions">
+        <button class="btn btn-danger btn-sm" onclick="deleteSender('${esc(s.id)}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function updateProviderHint() {
+  const hintEl = document.getElementById('sf-provider-hint');
+  const googleHelpEl = document.getElementById('sf-google-password-help');
+  if (selectedProviderPreset === 'google') {
+    hintEl.textContent = 'Google SMTP defaults applied.';
+    googleHelpEl.style.display = '';
+  } else {
+    hintEl.textContent = 'Select a provider to prefill SMTP host, port, and TLS settings.';
+    googleHelpEl.style.display = 'none';
+  }
+}
+
+function renderProviderPresetButtons() {
+  const wrap = document.getElementById('sf-provider-presets');
+  wrap.innerHTML = Object.entries(SMTP_PROVIDER_PRESETS).map(([key, preset]) => {
+    const isActive = key === selectedProviderPreset;
+    return `<button type="button" class="provider-preset ${isActive ? 'active' : ''}" data-provider="${esc(key)}">${esc(preset.label)}</button>`;
+  }).join('');
+  wrap.querySelectorAll('.provider-preset').forEach(btn => {
+    btn.addEventListener('click', () => applyProviderPreset(btn.dataset.provider));
+  });
+}
+
+function applyProviderPreset(key) {
+  const preset = SMTP_PROVIDER_PRESETS[key] || SMTP_PROVIDER_PRESETS.custom;
+  selectedProviderPreset = key in SMTP_PROVIDER_PRESETS ? key : 'custom';
+  document.getElementById('sf-host').value = preset.host;
+  document.getElementById('sf-port').value = preset.port;
+  document.getElementById('sf-secure').checked = !!preset.secure;
+  renderProviderPresetButtons();
+  updateProviderHint();
+}
+
+document.getElementById('sf-submit').addEventListener('click', async () => {
+  const label = document.getElementById('sf-label').value.trim();
+  const user  = document.getElementById('sf-user').value.trim();
+  if (!label || !user) return toast('Label and email are required', 'error');
+
+  const body = { type: 'smtp', label, user };
+  body.host     = document.getElementById('sf-host').value.trim();
+  body.port     = parseInt(document.getElementById('sf-port').value, 10) || 587;
+  body.secure   = document.getElementById('sf-secure').checked;
+  body.password = document.getElementById('sf-password').value;
+  if (!body.host || !body.password) return toast('Host and password are required', 'error');
+
+  const btn = document.getElementById('sf-submit');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/senders', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    allSenders.push(data);
+    ['sf-label','sf-user','sf-host','sf-password'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    applyProviderPreset('custom');
+    renderSendersList();
+    populateSenderDropdown();
+    toast('Sender added', 'success');
+  } catch (err) { toast('Error: ' + err.message, 'error'); }
+  finally { btn.disabled = false; }
+});
+
+async function deleteSender(id) {
+  if (!confirm('Delete this sender? Any profiles using it will also be deleted.')) return;
+  const res = await fetch('/api/senders/' + id, { method: 'DELETE' });
+  if (!res.ok) return toast('Delete failed', 'error');
+  allSenders  = allSenders.filter(s => s.id !== id);
+  allProfiles = allProfiles.filter(p => p.senderId !== id);
+  renderSendersList(); renderProfilesList(); populateSenderDropdown(); renderProfileBtnsAll();
+  toast('Sender deleted');
+}
+
+/* ─── Profiles ───────────────────────────────────────────────────────────── */
+function populateSenderDropdown() {
+  const sel  = document.getElementById('pf-sender');
+  const prev = sel.value;
+  sel.innerHTML = allSenders.length
+    ? allSenders.map(s => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('')
+    : '<option value="">— Add a sender first —</option>';
+  if (prev && allSenders.find(s => s.id === prev)) sel.value = prev;
+}
+
+function renderProfilesList() {
+  const list = document.getElementById('profiles-list');
+  if (!allProfiles.length) { list.innerHTML = '<div style="font-size:0.85rem;color:#aaa;padding:0.3rem 0">No profiles yet.</div>'; return; }
+  list.innerHTML = allProfiles.map(p => `
+    <div class="item-card">
+      <div class="profile-avatar">${avatarHtml(p)}</div>
+      <div class="item-info">
+        <div class="item-name">${esc(p.name)}</div>
+        <div class="item-sub">${esc(p.destEmail)}</div>
+        <div class="item-sub">via ${esc(p.senderLabel||'(unknown)')}</div>
+      </div>
+      <div class="item-actions">
+        <button class="btn btn-danger btn-sm" onclick="deleteProfile('${esc(p.id)}')">Delete</button>
+      </div>
+    </div>`).join('');
+}
+
+document.getElementById('pf-name').addEventListener('input', updateProfilePreview);
+document.getElementById('pf-image').addEventListener('change', updateProfilePreview);
+function updateProfilePreview() {
+  const name = document.getElementById('pf-name').value;
+  const file = document.getElementById('pf-image').files[0];
+  const preview = document.getElementById('pf-preview');
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = e => { preview.innerHTML = `<img src="${e.target.result}" alt="" />`; };
+    reader.readAsDataURL(file);
+  } else {
+    const bg = name ? avatarColor(name) : '#ccc';
+    const ini = name ? initials(name) : '?';
+    preview.innerHTML = `<div class="avatar-initials" style="background:${bg}">${esc(ini)}</div>`;
+  }
+}
+
+document.getElementById('pf-submit').addEventListener('click', async () => {
+  const name      = document.getElementById('pf-name').value.trim();
+  const destEmail = document.getElementById('pf-dest').value.trim();
+  const senderId  = document.getElementById('pf-sender').value;
+  const file      = document.getElementById('pf-image').files[0];
+  if (!name || !destEmail || !senderId) return toast('Name, email and sender are required', 'error');
+
+  const fd = new FormData();
+  fd.append('name', name); fd.append('destEmail', destEmail); fd.append('senderId', senderId);
+  if (file) fd.append('image', file);
+
+  const btn = document.getElementById('pf-submit');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/profiles', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    allProfiles.push(data);
+    ['pf-name','pf-dest'].forEach(id => { document.getElementById(id).value = ''; });
+    document.getElementById('pf-image').value = '';
+    updateProfilePreview();
+    renderProfilesList();
+    renderProfileBtnsAll();
+    toast('Profile added', 'success');
+  } catch (err) { toast('Error: ' + err.message, 'error'); }
+  finally { btn.disabled = false; }
+});
+
+async function deleteProfile(id) {
+  if (!confirm('Delete this profile?')) return;
+  const res = await fetch('/api/profiles/' + id, { method: 'DELETE' });
+  if (!res.ok) return toast('Delete failed', 'error');
+  allProfiles = allProfiles.filter(p => p.id !== id);
+  renderProfilesList(); renderProfileBtnsAll();
+  toast('Profile deleted');
+}
+
+/* ─── Init ───────────────────────────────────────────────────────────────── */
+(async () => {
+  await loadProfiles();
+  await loadSenders();
+  renderProviderPresetButtons();
+  updateProviderHint();
+})();
+</script>
+</body>
+</html>
