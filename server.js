@@ -91,6 +91,15 @@ async function getBrowser() {
   return browser;
 }
 
+async function restartBrowser(reason) {
+  const oldBrowser = browser;
+  browser = null;
+  if (oldBrowser) {
+    console.warn(`Restarting browser session: ${reason}`);
+    await oldBrowser.close().catch(err => console.warn('Browser close failed:', err.message));
+  }
+}
+
 // ── HTTP fetch with redirect follow (returns IncomingMessage) ────────────────
 function fetchWithRedirects(url, headers, maxRedirects = 10) {
   return new Promise((resolve, reject) => {
@@ -104,6 +113,14 @@ function fetchWithRedirects(url, headers, maxRedirects = 10) {
       }
     }).on('error', reject);
   });
+}
+
+function remoteHttpError(statusCode, baseUrl) {
+  const err = new Error(`Remote HTTP ${statusCode}`);
+  err.code = 'REMOTE_HTTP';
+  err.statusCode = statusCode;
+  err.baseUrl = baseUrl;
+  return err;
 }
 
 // ── Get cookies from Puppeteer context ───────────────────────────────────────
@@ -171,7 +188,7 @@ async function fetchDownloadFromBase(dlPath, baseUrl, cookieStr) {
     'Accept':          '*/*',
     'Accept-Language': 'en-US,en;q=0.9',
   });
-  if (fileRes.statusCode >= 400) throw new Error(`Remote HTTP ${fileRes.statusCode}`);
+  if (fileRes.statusCode >= 400) throw remoteHttpError(fileRes.statusCode, baseUrl);
   return new Promise((resolve, reject) => {
     const chunks = [];
     fileRes.on('data', c => chunks.push(c));
@@ -212,13 +229,21 @@ async function downloadToBuffer(dlPath, title = '') {
             }
             continue;
           } catch (innerErr) {
-            errors.push({ baseUrl, message: innerErr.message });
+            errors.push({ baseUrl, message: innerErr.message, statusCode: innerErr.statusCode });
             continue;
           }
         }
       }
-      errors.push({ baseUrl, message: err.message });
+      errors.push({ baseUrl, message: err.message, statusCode: err.statusCode });
     }
+  }
+
+  if (errors.some(e => e.statusCode === 503)) {
+    await restartBrowser('remote download returned HTTP 503');
+    const upstream503Error = new Error('The source website returned HTTP 503. The browser session was restarted; please try sending the book again.');
+    upstream503Error.code = 'UPSTREAM_503_BROWSER_RESTARTED';
+    upstream503Error.retrySuggested = true;
+    throw upstream503Error;
   }
 
   if (htmlResults.length === DOWNLOAD_BASE_URLS.length) {
@@ -319,6 +344,13 @@ app.get('/api/download', async (req, res) => {
           error: 'Download blocked by source website on all mirrors (articles.sk and 1lib.sk).',
           htmlPreviewId: err.htmlPreviewIds?.[0] || null,
           htmlPreviewIds: err.htmlPreviewIds || [],
+        });
+      }
+      if (err.code === 'UPSTREAM_503_BROWSER_RESTARTED') {
+        return res.status(503).json({
+          error: err.message,
+          retrySuggested: true,
+          puppeteerRestarted: true,
         });
       }
       res.status(500).json({ error: err.message });
@@ -533,6 +565,13 @@ app.post('/api/send', async (req, res) => {
         error: 'Download blocked by source website on all mirrors (articles.sk and 1lib.sk).',
         htmlPreviewId: err.htmlPreviewIds?.[0] || null,
         htmlPreviewIds: err.htmlPreviewIds || [],
+      });
+    }
+    if (err.code === 'UPSTREAM_503_BROWSER_RESTARTED') {
+      return res.status(503).json({
+        error: err.message,
+        retrySuggested: true,
+        puppeteerRestarted: true,
       });
     }
     res.status(500).json({ error: err.message });

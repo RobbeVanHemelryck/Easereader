@@ -620,6 +620,7 @@ async function sendToProfile(evt, btnEl) {
     if (!res.ok || data.error) {
       const err = new Error(data.error || 'Send failed');
       err.htmlPreviewId = data.htmlPreviewId || null;
+      err.retrySuggested = !!data.retrySuggested;
       throw err;
     }
     btnEl.classList.remove('sending'); btnEl.classList.add('sent');
@@ -630,8 +631,9 @@ async function sendToProfile(evt, btnEl) {
   } catch (err) {
     btnEl.classList.remove('sending'); btnEl.classList.add('failed');
     statusDiv.innerHTML = '&#10007;';
-    showSendError('Failed: ' + err.message, err.htmlPreviewId || null);
-    toast('Failed: ' + err.message, 'error');
+    const prefix = err.retrySuggested ? 'Temporary source error: ' : 'Failed: ';
+    showSendError(prefix + err.message, err.htmlPreviewId || null);
+    toast(err.retrySuggested ? 'Source returned 503. Browser session restarted; try again.' : 'Failed: ' + err.message, 'error');
     setTimeout(() => { btnEl.classList.remove('failed'); statusDiv.innerHTML = ''; }, 4000);
   }
 }
