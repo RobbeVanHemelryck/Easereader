@@ -379,7 +379,7 @@
         <div class="item-list" id="profiles-list"></div>
       </div>
       <div>
-        <div class="panel-section-title">Add profile</div>
+        <div class="panel-section-title" id="profile-form-title">Add profile</div>
         <div class="panel-form">
           <div class="form-row">
             <label>Name</label>
@@ -402,7 +402,10 @@
               <input id="pf-image" type="file" accept="image/*" />
             </div>
           </div>
-          <button class="btn btn-primary" id="pf-submit">Add profile</button>
+          <div style="display:flex;gap:0.5rem">
+            <button class="btn btn-primary" id="pf-submit">Add profile</button>
+            <button class="btn btn-secondary" id="pf-cancel" style="display:none">Cancel</button>
+          </div>
         </div>
       </div>
     </div>
@@ -494,6 +497,7 @@ let allProfiles = [];
 let allSenders  = [];
 let selectedProviderPreset = 'custom';
 let editingSenderId = null;
+let editingProfileId = null;
 
 const SMTP_PROVIDER_PRESETS = {
   custom:   { label: 'Custom', host: '',                        port: 587, secure: false },
@@ -841,8 +845,10 @@ function populateSenderDropdown() {
 function renderProfilesList() {
   const list = document.getElementById('profiles-list');
   if (!allProfiles.length) { list.innerHTML = '<div style="font-size:0.85rem;color:#aaa;padding:0.3rem 0">No profiles yet.</div>'; return; }
-  list.innerHTML = allProfiles.map(p => `
-    <div class="item-card">
+  list.innerHTML = allProfiles.map(p => {
+    const selected = p.id === editingProfileId ? ' selected' : '';
+    return `
+    <div class="item-card selectable${selected}" onclick="editProfile('${esc(p.id)}')">
       <div class="profile-avatar">${avatarHtml(p)}</div>
       <div class="item-info">
         <div class="item-name">${esc(p.name)}</div>
@@ -850,9 +856,10 @@ function renderProfilesList() {
         <div class="item-sub">via ${esc(p.senderLabel||'(unknown)')}</div>
       </div>
       <div class="item-actions">
-        <button class="btn btn-danger btn-sm" onclick="deleteProfile('${esc(p.id)}')">Delete</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteProfile(event, '${esc(p.id)}')">Delete</button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 document.getElementById('pf-name').addEventListener('input', updateProfilePreview);
@@ -866,11 +873,47 @@ function updateProfilePreview() {
     reader.onload = e => { preview.innerHTML = `<img src="${e.target.result}" alt="" />`; };
     reader.readAsDataURL(file);
   } else {
+    const editingProfile = allProfiles.find(p => p.id === editingProfileId);
+    if (editingProfile?.imagePath) {
+      preview.innerHTML = avatarHtml(editingProfile);
+      return;
+    }
     const bg = name ? avatarColor(name) : '#ccc';
     const ini = name ? initials(name) : '?';
     preview.innerHTML = `<div class="avatar-initials" style="background:${bg}">${esc(ini)}</div>`;
   }
 }
+
+function setProfileEditMode(profile) {
+  editingProfileId = profile ? profile.id : null;
+  document.getElementById('profile-form-title').textContent = profile ? 'Edit profile' : 'Add profile';
+  document.getElementById('pf-submit').textContent = profile ? 'Save profile' : 'Add profile';
+  document.getElementById('pf-cancel').style.display = profile ? '' : 'none';
+  renderProfilesList();
+}
+
+function resetProfileForm() {
+  editingProfileId = null;
+  ['pf-name','pf-dest'].forEach(id => { document.getElementById(id).value = ''; });
+  document.getElementById('pf-image').value = '';
+  updateProfilePreview();
+  setProfileEditMode(null);
+}
+
+function editProfile(id) {
+  const profile = allProfiles.find(p => p.id === id);
+  if (!profile) return;
+  document.getElementById('pf-name').value = profile.name || '';
+  document.getElementById('pf-dest').value = profile.destEmail || '';
+  document.getElementById('pf-sender').value = profile.senderId || '';
+  document.getElementById('pf-image').value = '';
+  document.getElementById('pf-preview').innerHTML = avatarHtml(profile);
+  setProfileEditMode(profile);
+}
+
+document.getElementById('pf-cancel').addEventListener('click', () => {
+  resetProfileForm();
+});
 
 document.getElementById('pf-submit').addEventListener('click', async () => {
   const name      = document.getElementById('pf-name').value.trim();
@@ -885,26 +928,33 @@ document.getElementById('pf-submit').addEventListener('click', async () => {
 
   const btn = document.getElementById('pf-submit');
   btn.disabled = true;
+  const isEditing = !!editingProfileId;
   try {
-    const res = await fetch('/api/profiles', { method: 'POST', body: fd });
+    const url = editingProfileId ? '/api/profiles/' + editingProfileId : '/api/profiles';
+    const method = editingProfileId ? 'PUT' : 'POST';
+    const res = await fetch(url, { method, body: fd });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    allProfiles.push(data);
-    ['pf-name','pf-dest'].forEach(id => { document.getElementById(id).value = ''; });
-    document.getElementById('pf-image').value = '';
-    updateProfilePreview();
+    if (editingProfileId) {
+      allProfiles = allProfiles.map(p => p.id === data.id ? data : p);
+    } else {
+      allProfiles.push(data);
+    }
+    resetProfileForm();
     renderProfilesList();
     renderProfileBtnsAll();
-    toast('Profile added', 'success');
+    toast(isEditing ? 'Profile updated' : 'Profile added', 'success');
   } catch (err) { toast('Error: ' + err.message, 'error'); }
   finally { btn.disabled = false; }
 });
 
-async function deleteProfile(id) {
+async function deleteProfile(evt, id) {
+  if (evt) evt.stopPropagation();
   if (!confirm('Delete this profile?')) return;
   const res = await fetch('/api/profiles/' + id, { method: 'DELETE' });
   if (!res.ok) return toast('Delete failed', 'error');
   allProfiles = allProfiles.filter(p => p.id !== id);
+  if (editingProfileId === id) resetProfileForm();
   renderProfilesList(); renderProfileBtnsAll();
   toast('Profile deleted');
 }
