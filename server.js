@@ -8,16 +8,27 @@ const nodemailer = require('nodemailer');
 const multer     = require('multer');
 const { WebSocketServer, WebSocket } = require('ws');
 const { v4: uuidv4 } = require('uuid');
-const { LegacyBookDownloadStrategy, SourceBookDownloadStrategy } = require('./download-strategies');
+const { ZLibraryStrategy, AnnasArchiveStrategy, normalizeSource } = require('./download-strategies');
 
 const app      = express();
 const PORT     = 3000;
 const PRIMARY_BASE_URL = 'https://articles.sk';
 const FALLBACK_BASE_URL = 'https://1lib.sk';
-const DOWNLOAD_BASE_URLS = [PRIMARY_BASE_URL, FALLBACK_BASE_URL];
 // Optional source hostname override. Leave null/empty to use process.env.SOURCE.
 const SOURCE = 'annas-archive.gl';
 const CONFIGURED_SOURCE = String(SOURCE || process.env.SOURCE || '').trim();
+
+// Developer-configurable book source choices. URLs exposed in Settings and
+// accepted from clients must be declared here.
+const BOOK_SOURCE_OPTIONS = {
+  zlibrary: [
+    { label: 'articles.sk', url: PRIMARY_BASE_URL },
+    { label: '1lib.sk', url: FALLBACK_BASE_URL },
+  ],
+  AnnasArchive: [
+    { label: CONFIGURED_SOURCE || 'annas-archive.gl', url: normalizeSource(CONFIGURED_SOURCE || 'annas-archive.gl') },
+  ],
+};
 
 const DATA_DIR     = process.env.CONFIG_DIR || path.join(__dirname, 'data');
 const UPLOADS_DIR  = path.join(DATA_DIR, 'uploads');
@@ -154,44 +165,6 @@ async function getSkCookies() {
   }
 }
 
-async function findMirrorDlByTitle(baseUrl, title) {
-  if (!title || !title.trim()) return null;
-
-  let page;
-  try {
-    const b = await getBrowser();
-    page = await b.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
-
-    const url = `${baseUrl}/s/${encodeURIComponent(title)}/?extensions%5B0%5D=EPUB`;
-    await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
-    await page.waitForSelector('z-bookcard', { timeout: 15000 }).catch(() => {});
-
-    const candidates = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('z-bookcard'))
-        .filter(c => (c.getAttribute('extension') || '').toLowerCase() === 'epub')
-        .map(c => ({
-          title: c.querySelector('[slot="title"]')?.textContent?.trim() || '',
-          dl: c.getAttribute('download') || '',
-        }))
-        .filter(c => /^\/dl\/[A-Za-z0-9_-]+$/.test(c.dl));
-    });
-
-    if (!candidates.length) return null;
-    const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    const target = norm(title);
-    const exact = candidates.find(c => norm(c.title) === target);
-    if (exact) return exact.dl;
-    const partial = candidates.find(c => norm(c.title).includes(target) || target.includes(norm(c.title)));
-    return (partial || candidates[0]).dl;
-  } catch {
-    return null;
-  } finally {
-    if (page) await page.close().catch(() => {});
-  }
-}
-
 // ── Download EPUB to buffer ──────────────────────────────────────────────────
 async function fetchDownloadFromBase(dlPath, baseUrl, cookieStr) {
   if (!dlPath || !/^\/dl\/[A-Za-z0-9_-]+$/.test(dlPath)) throw new Error('Invalid download path');
@@ -215,63 +188,33 @@ async function fetchDownloadFromBase(dlPath, baseUrl, cookieStr) {
   });
 }
 
-async function downloadToBuffer(dlPath, title = '') {
+async function downloadToBuffer(dlPath, _title = '', baseUrl = PRIMARY_BASE_URL) {
   if (!dlPath || !/^\/dl\/[A-Za-z0-9_-]+$/.test(dlPath)) throw new Error('Invalid download path');
 
   const cookieStr = await getSkCookies();
-  const htmlResults = [];
-  const errors = [];
+  try {
+    const result = await fetchDownloadFromBase(dlPath, baseUrl, cookieStr);
+    if (!detectHtmlPayload(result.buffer, result.contentType)) return result;
 
-  for (const baseUrl of DOWNLOAD_BASE_URLS) {
-    try {
-      const result = await fetchDownloadFromBase(dlPath, baseUrl, cookieStr);
-      if (detectHtmlPayload(result.buffer, result.contentType)) {
-        htmlResults.push(result);
-        continue;
-      }
-      return result;
-    } catch (err) {
-      if (baseUrl === FALLBACK_BASE_URL && /^Remote HTTP 404/.test(err.message) && title) {
-        const mirrorDl = await findMirrorDlByTitle(FALLBACK_BASE_URL, title);
-        if (mirrorDl) {
-          try {
-            const mirrorResult = await fetchDownloadFromBase(mirrorDl, FALLBACK_BASE_URL, cookieStr);
-            if (detectHtmlPayload(mirrorResult.buffer, mirrorResult.contentType)) {
-              htmlResults.push(mirrorResult);
-            } else {
-              return mirrorResult;
-            }
-            continue;
-          } catch (innerErr) {
-            errors.push({ baseUrl, message: innerErr.message, statusCode: innerErr.statusCode });
-            continue;
-          }
-        }
-      }
-      errors.push({ baseUrl, message: err.message, statusCode: err.statusCode });
+    const htmlPreviewId = storeHtmlPreview(result.buffer.toString('utf8'), result.contentType);
+    const htmlError = new Error(`Download blocked by source website (${new URL(baseUrl).host}).`);
+    htmlError.code = 'SOURCE_HTML';
+    htmlError.htmlPreviewId = htmlPreviewId;
+    throw htmlError;
+  } catch (err) {
+    if (err.statusCode === 503) {
+      await restartBrowser('remote download returned HTTP 503');
+      const upstream503Error = new Error('The selected source website returned HTTP 503. The browser session was restarted; select another URL or try again.');
+      upstream503Error.code = 'UPSTREAM_503_BROWSER_RESTARTED';
+      upstream503Error.retrySuggested = true;
+      throw upstream503Error;
     }
+    if (err.code === 'SOURCE_HTML') throw err;
+    const downloadError = new Error(`Download failed from ${baseUrl}: ${err.message}`);
+    downloadError.code = 'DOWNLOAD_FAILED';
+    downloadError.statusCode = err.statusCode;
+    throw downloadError;
   }
-
-  if (errors.some(e => e.statusCode === 503)) {
-    await restartBrowser('remote download returned HTTP 503');
-    const upstream503Error = new Error('The source website returned HTTP 503. The browser session was restarted; please try sending the book again.');
-    upstream503Error.code = 'UPSTREAM_503_BROWSER_RESTARTED';
-    upstream503Error.retrySuggested = true;
-    throw upstream503Error;
-  }
-
-  if (htmlResults.length === DOWNLOAD_BASE_URLS.length) {
-    const htmlPreviewIds = htmlResults.map(r => storeHtmlPreview(r.buffer.toString('utf8'), r.contentType));
-    const mirrorNames = DOWNLOAD_BASE_URLS.map(u => new URL(u).host).join(', ');
-    const allHtmlError = new Error(`Download blocked by source website on all mirrors (${mirrorNames}).`);
-    allHtmlError.code = 'ALL_MIRRORS_HTML';
-    allHtmlError.htmlPreviewIds = htmlPreviewIds;
-    throw allHtmlError;
-  }
-
-  const allFailedError = new Error(errors.length ? `Download failed: ${errors.map(e => `${e.baseUrl} -> ${e.message}`).join(' | ')}` : 'Download failed');
-  allFailedError.code = 'DOWNLOAD_FAILED';
-  throw allFailedError;
 }
 
 // ── Build nodemailer transport for a sender ──────────────────────────────────
@@ -288,7 +231,7 @@ function buildTransport(sender) {
 // SEARCH & DOWNLOAD strategies
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function legacySearch(query) {
+async function zLibrarySearch(query, baseUrl = PRIMARY_BASE_URL) {
   let page;
   try {
     const b = await getBrowser();
@@ -296,7 +239,7 @@ async function legacySearch(query) {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
 
-    const url = `${PRIMARY_BASE_URL}/s/${encodeURIComponent(query)}/?extensions%5B0%5D=EPUB`;
+    const url = `${baseUrl}/s/${encodeURIComponent(query)}/?extensions%5B0%5D=EPUB`;
     console.log(`Searching: ${url}`);
     await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
     await page.waitForSelector('z-bookcard', { timeout: 20000 }).catch(() => {});
@@ -321,38 +264,55 @@ async function legacySearch(query) {
             url:       href.startsWith('http') ? href : base + href,
           };
         });
-    }, PRIMARY_BASE_URL);
+    }, baseUrl);
 
-    return results.map(result => ({ ...result, strategy: 'legacy' }));
+    return results.map(result => ({ ...result, strategy: 'zlibrary' }));
   } finally {
     if (page) await page.close().catch(() => {});
   }
 }
 
 const downloadStrategies = new Map();
-const legacyStrategy = new LegacyBookDownloadStrategy({ search: legacySearch, download: downloadToBuffer });
-downloadStrategies.set(legacyStrategy.name, legacyStrategy);
-if (CONFIGURED_SOURCE) {
-  const sourceStrategy = new SourceBookDownloadStrategy({
-    source: CONFIGURED_SOURCE,
-    getBrowser,
-    fetchWithRedirects,
-    onProgress: broadcastDownloadProgress,
-  });
-  downloadStrategies.set(sourceStrategy.name, sourceStrategy);
-}
-const activeSearchStrategy = downloadStrategies.get('source') || legacyStrategy;
+const zLibraryStrategy = new ZLibraryStrategy({ search: zLibrarySearch, download: downloadToBuffer });
+downloadStrategies.set(zLibraryStrategy.name, zLibraryStrategy);
+const sourceStrategy = new AnnasArchiveStrategy({
+  source: BOOK_SOURCE_OPTIONS.AnnasArchive[0].url,
+  getBrowser,
+  fetchWithRedirects,
+  onProgress: broadcastDownloadProgress,
+});
+downloadStrategies.set(sourceStrategy.name, sourceStrategy);
 
 function strategyFor(name, dl) {
-  const strategy = downloadStrategies.get(name || (/^\/dl\//.test(dl || '') ? 'legacy' : 'source'));
+  const normalizedName = name === 'legacy' ? 'zlibrary' : name;
+  const strategy = downloadStrategies.get(normalizedName || (/^\/dl\//.test(dl || '') ? 'zlibrary' : 'source'));
   return strategy && strategy.isValidDownloadId(dl) ? strategy : null;
 }
+
+function allowedBookSourceUrl(group, requestedUrl) {
+  const options = BOOK_SOURCE_OPTIONS[group] || [];
+  const requested = String(requestedUrl || '').trim();
+  return options.find(option => option.url === requested)?.url || options[0]?.url;
+}
+
+function requestedBookSources(input) {
+  return {
+    zlibraryUrl: allowedBookSourceUrl('zlibrary', input.zlibraryUrl),
+    sourceUrl: allowedBookSourceUrl('AnnasArchive', input.sourceUrl),
+  };
+}
+
+app.get('/api/book-sources', (_req, res) => res.json(BOOK_SOURCE_OPTIONS));
 
 app.get('/api/search', async (req, res) => {
   const query = (req.query.q || '').trim();
   if (!query) return res.json({ results: [] });
   try {
-    res.json({ results: await activeSearchStrategy.search(query) });
+    const strategy = strategyFor(req.query.strategy, req.query.strategy === 'zlibrary' ? '/dl/placeholder' : '0'.repeat(32));
+    if (!strategy) return res.status(400).json({ error: 'Invalid book source strategy' });
+    const sources = requestedBookSources(req.query);
+    const baseUrl = strategy.name === 'zlibrary' ? sources.zlibraryUrl : sources.sourceUrl;
+    res.json({ results: await strategy.search(query, { baseUrl }) });
   } catch (err) {
     console.error('Search error:', err.message);
     res.status(500).json({ error: err.message });
@@ -362,6 +322,7 @@ app.get('/api/search', async (req, res) => {
 app.get('/api/download', async (req, res) => {
   const dlPath = req.query.dl;
   const strategy = strategyFor(req.query.strategy, dlPath);
+  const sources = requestedBookSources(req.query);
   const title  = (req.query.title || 'ebook').trim();
 
   if (!strategy) {
@@ -370,7 +331,8 @@ app.get('/api/download', async (req, res) => {
   const safeName = title.replace(/[^\w\s\-()']/g, '').trim().replace(/\s+/g, '_').substring(0, 100) || 'ebook';
 
   try {
-    const download = await strategy.download(dlPath, title);
+    const baseUrl = strategy.name === 'zlibrary' ? sources.zlibraryUrl : sources.sourceUrl;
+    const download = await strategy.download(dlPath, title, { baseUrl });
     res.setHeader('Content-Type', download.contentType || 'application/epub+zip');
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}.epub"`);
     res.setHeader('Content-Length', String(download.buffer.length));
@@ -378,11 +340,10 @@ app.get('/api/download', async (req, res) => {
   } catch (err) {
     console.error('Download error:', err.message);
     if (!res.headersSent) {
-      if (err.code === 'ALL_MIRRORS_HTML') {
+      if (err.code === 'SOURCE_HTML') {
         return res.status(429).json({
-          error: 'Download blocked by source website on all mirrors (articles.sk and 1lib.sk).',
-          htmlPreviewId: err.htmlPreviewIds?.[0] || null,
-          htmlPreviewIds: err.htmlPreviewIds || [],
+          error: err.message,
+          htmlPreviewId: err.htmlPreviewId || null,
         });
       }
       if (err.code === 'UPSTREAM_503_BROWSER_RESTARTED') {
@@ -581,10 +542,12 @@ app.post('/api/send', async (req, res) => {
   const safeName = (title || 'ebook').replace(/[^\w\s\-()']/g, '').trim().replace(/\s+/g, '_').substring(0, 100) || 'ebook';
   const strategy = strategyFor(strategyName, dl);
   if (!strategy) return res.status(400).json({ error: 'Invalid download id or strategy' });
+  const sources = requestedBookSources(req.body);
 
   try {
     console.log(`Sending "${safeName}.epub" to ${profile.destEmail} via ${sender.user}…`);
-    const download  = await strategy.download(dl, title || '');
+    const baseUrl = strategy.name === 'zlibrary' ? sources.zlibraryUrl : sources.sourceUrl;
+    const download  = await strategy.download(dl, title || '', { baseUrl });
     const buffer    = download.buffer;
 
     const transport = buildTransport(sender);
@@ -601,11 +564,10 @@ app.post('/api/send', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Send error:', err.message);
-    if (err.code === 'ALL_MIRRORS_HTML') {
+    if (err.code === 'SOURCE_HTML') {
       return res.status(429).json({
-        error: 'Download blocked by source website on all mirrors (articles.sk and 1lib.sk).',
-        htmlPreviewId: err.htmlPreviewIds?.[0] || null,
-        htmlPreviewIds: err.htmlPreviewIds || [],
+        error: err.message,
+        htmlPreviewId: err.htmlPreviewId || null,
       });
     }
     if (err.code === 'UPSTREAM_503_BROWSER_RESTARTED') {

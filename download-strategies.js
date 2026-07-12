@@ -40,18 +40,18 @@ class BookDownloadStrategy {
   async download() { throw new Error('download() must be implemented'); }
 }
 
-class LegacyBookDownloadStrategy extends BookDownloadStrategy {
+class ZLibraryStrategy extends BookDownloadStrategy {
   constructor({ search, download }) {
-    super('legacy');
+    super('zlibrary');
     this.searchBooks = search;
     this.downloadBook = download;
   }
   isValidDownloadId(id) { return /^\/dl\/[A-Za-z0-9_-]+$/.test(id || ''); }
-  search(query) { return this.searchBooks(query); }
-  download(id, title) { return this.downloadBook(id, title); }
+  search(query, options) { return this.searchBooks(query, options?.baseUrl); }
+  download(id, title, options) { return this.downloadBook(id, title, options?.baseUrl); }
 }
 
-class SourceBookDownloadStrategy extends BookDownloadStrategy {
+class AnnasArchiveStrategy extends BookDownloadStrategy {
   constructor({ source, getBrowser, fetchWithRedirects, onProgress = () => {} }) {
     super('source');
     this.baseUrl = normalizeSource(source);
@@ -70,15 +70,16 @@ class SourceBookDownloadStrategy extends BookDownloadStrategy {
     return page;
   }
 
-  async search(query) {
+  async search(query, options = {}) {
+    const baseUrl = normalizeSource(options.baseUrl || this.baseUrl);
     let page;
     try {
       page = await this.newPage();
-      const url = `${this.baseUrl}/search?q=${encodeURIComponent(query).replace(/%20/g, '+')}`;
+      const url = `${baseUrl}/search?q=${encodeURIComponent(query).replace(/%20/g, '+')}`;
       console.log(`[source:search] query=${JSON.stringify(query)} url=${url}`);
       await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
       await page.waitForSelector('a[href^="/md5/"]', { timeout: 20000 }).catch(() => {});
-      const results = await page.evaluate(extractSourceResults, this.baseUrl);
+      const results = await page.evaluate(extractSourceResults, baseUrl);
       console.log(`[source:search] found ${results.length} EPUB book(s)`);
       results.forEach(book => console.log(`[source:search] book id=${book.dl} title=${JSON.stringify(book.title)}`));
       return results;
@@ -87,12 +88,13 @@ class SourceBookDownloadStrategy extends BookDownloadStrategy {
     }
   }
 
-  async download(id) {
+  async download(id, _title, options = {}) {
     if (!this.isValidDownloadId(id)) throw new Error('Invalid download id');
+    const baseUrl = normalizeSource(options.baseUrl || this.baseUrl);
     let page;
     try {
       page = await this.newPage();
-      const url = `${this.baseUrl}/slow_download/${id}/0/0`;
+      const url = `${baseUrl}/slow_download/${id}/0/0`;
       console.log(`[source:download] book id=${id} slow-download-url=${url}`);
       const pageResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
       if (!pageResponse || !pageResponse.ok()) {
@@ -179,7 +181,7 @@ class SourceBookDownloadStrategy extends BookDownloadStrategy {
             stage: 'download_finished', bookId: id, bytes: buffer.length,
             message: `Download finished for ${id}`,
           });
-          return { buffer, contentType, baseUrl: this.baseUrl };
+          return { buffer, contentType, baseUrl };
         } catch (_) { /* Browser-managed downloads are fetched below. */ }
       }
 
@@ -198,7 +200,7 @@ class SourceBookDownloadStrategy extends BookDownloadStrategy {
         stage: 'download_finished', bookId: id, bytes: buffer.length,
         message: `Download finished for ${id}`,
       });
-      return { buffer, contentType, baseUrl: this.baseUrl };
+      return { buffer, contentType, baseUrl };
     } finally {
       if (page) await page.close().catch(() => {});
     }
@@ -216,4 +218,4 @@ function normalizeSource(source) {
   return url.origin;
 }
 
-module.exports = { BookDownloadStrategy, LegacyBookDownloadStrategy, SourceBookDownloadStrategy, normalizeSource, extractSourceResults };
+module.exports = { BookDownloadStrategy, ZLibraryStrategy, AnnasArchiveStrategy, normalizeSource, extractSourceResults };

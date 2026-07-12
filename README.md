@@ -23,6 +23,11 @@ You can also set the `SOURCE` constant near the top of `server.js`. A non-empty
 constant takes precedence over the environment variable; leave it empty or
 `null` to use `process.env.SOURCE`.
 
+Selectable source URLs are defined in `BOOK_SOURCE_OPTIONS` near the top of
+`server.js`. Add or remove `{ label, url }` entries there to change the choices
+shown under Settings > Book sources. The browser stores the active strategy and
+one selected URL per strategy in local storage.
+
 ### Docker (published image)
 1. Pull image:
    ```bash

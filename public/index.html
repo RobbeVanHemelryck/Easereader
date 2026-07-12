@@ -62,14 +62,6 @@
       border-radius: 12px;
     }
     .book-row:hover { background: #f7faff; }
-    .book-row.downloading { pointer-events: none; opacity: 0.6; }
-    .book-row.downloading::after {
-      content: '\2193 Downloading\2026'; position: absolute; inset: 0;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.9rem; font-weight: 600; color: #2878c3;
-      background: rgba(255,255,255,0.6); border-radius: inherit;
-    }
-
     .book-cover { flex-shrink: 0; width: 68px; height: 90px; object-fit: cover; border: 1px solid #ddd; border-radius: 3px; background: #eee; }
     .book-cover-placeholder {
       flex-shrink: 0; width: 68px; height: 90px; background: #e8e8e8;
@@ -86,6 +78,14 @@
     .book-meta { margin-top: auto; padding-top: 0.55rem; display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; font-size: 0.8rem; color: #666; }
     .book-meta span { white-space: nowrap; }
     .book-meta strong { color: #333; font-weight: 600; }
+    .book-status { display: none; margin-top: 0.65rem; padding-top: 0.55rem; border-top: 1px solid #eee; }
+    .book-row.status-active .book-status { display: block; }
+    .book-status-log { display: flex; flex-direction: column; gap: 0.2rem; margin-top: 0.3rem; }
+    .book-status-log:empty::after { content: 'No activity yet'; color: #aaa; font-size: 0.75rem; font-style: italic; }
+    .book-status-entry { display: grid; grid-template-columns: 5.2rem 1fr; gap: 0.4rem; font-size: 0.75rem; line-height: 1.35; color: #555; }
+    .book-status-entry time { color: #999; font-variant-numeric: tabular-nums; }
+    .book-status-entry.success span { color: #218c53; }
+    .book-status-entry.error span { color: #c0392b; }
     .book-rating { display: flex; align-items: center; gap: 0.25rem; margin-left: auto; flex-shrink: 0; }
     .star-icon { color: #e8a010; font-size: 0.9rem; }
     .star-icon.empty { color: #ccc; }
@@ -237,6 +237,13 @@
     .provider-preset:hover { background: #f2f7fc; border-color: #bfd8ef; }
     .provider-preset.active { background: #eaf4fd; border-color: #2878c3; color: #1f5e98; }
 
+    .book-source-section { border: 1px solid #e2e2e2; border-radius: 8px; padding: 0.9rem; background: #fafafa; }
+    .book-source-section + .book-source-section { margin-top: 0.85rem; }
+    .book-source-heading { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; color: #333; margin-bottom: 0.7rem; }
+    .book-source-options { display: flex; flex-direction: column; gap: 0.45rem; }
+    .book-source-option { display: flex; align-items: center; gap: 0.5rem; font-size: 0.83rem; color: #555; cursor: pointer; }
+    .book-source-url { color: #777; word-break: break-all; }
+
     .btn { padding: 0.5rem 1rem; font-size: 0.88rem; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; transition: background 0.15s; white-space: nowrap; }
     .btn-primary   { background: #2878c3; color: #fff; }
     .btn-primary:hover { background: #1c5fa0; }
@@ -323,6 +330,7 @@
       <button class="panel-tab" data-tab="info">How it works</button>
       <button class="panel-tab active" data-tab="senders">Senders</button>
       <button class="panel-tab" data-tab="profiles">Profiles</button>
+      <button class="panel-tab" data-tab="book-sources">Book sources</button>
     </div>
 
     <!-- ── SENDERS PANE ─────────────────────────────────────────────────── -->
@@ -435,6 +443,13 @@
         </div>
       </div>
     </div>
+
+    <div class="panel-pane" id="pane-book-sources">
+      <div class="panel-form">
+        <div class="help-text" style="font-size:0.82rem;color:#555">Choose the active search/download strategy and one URL for each source.</div>
+        <div id="book-sources-config"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -498,6 +513,67 @@ let allSenders  = [];
 let selectedProviderPreset = 'custom';
 let editingSenderId = null;
 let editingProfileId = null;
+const BOOK_SOURCE_STORAGE_KEY = 'easereader.bookSources';
+let bookSourceOptions = null;
+let bookSourceSelection = null;
+
+async function loadBookSources() {
+  if (bookSourceOptions && bookSourceSelection) return;
+  const response = await fetch('/api/book-sources');
+  if (!response.ok) throw new Error('Could not load book source configuration');
+  bookSourceOptions = await response.json();
+  let stored = {};
+  try { stored = JSON.parse(localStorage.getItem(BOOK_SOURCE_STORAGE_KEY) || '{}'); } catch (_) {}
+  const zlibraryUrls = bookSourceOptions.zlibrary || [];
+  const sourceUrls = bookSourceOptions.AnnasArchive || [];
+  bookSourceSelection = {
+    strategy: ['zlibrary', 'source'].includes(stored.strategy) ? stored.strategy : 'source',
+    zlibraryUrl: zlibraryUrls.some(item => item.url === stored.zlibraryUrl) ? stored.zlibraryUrl : zlibraryUrls[0]?.url || '',
+    sourceUrl: sourceUrls.some(item => item.url === stored.sourceUrl) ? stored.sourceUrl : sourceUrls[0]?.url || '',
+  };
+  persistBookSourceSelection();
+}
+
+function persistBookSourceSelection() {
+  localStorage.setItem(BOOK_SOURCE_STORAGE_KEY, JSON.stringify(bookSourceSelection));
+  refreshResultDownloadUrls();
+}
+
+function bookSourceRequestParams() {
+  return { ...bookSourceSelection };
+}
+
+function renderBookSources() {
+  const container = document.getElementById('book-sources-config');
+  if (!container || !bookSourceOptions || !bookSourceSelection) return;
+  const section = (title, strategy, group, selectedUrlKey) => `
+    <section class="book-source-section">
+      <label class="book-source-heading">
+        <input type="radio" name="active-book-strategy" value="${esc(strategy)}" ${bookSourceSelection.strategy === strategy ? 'checked' : ''} />
+        ${esc(title)}
+      </label>
+      <div class="book-source-options">
+        ${(bookSourceOptions[group] || []).map(option => `<label class="book-source-option">
+          <input type="radio" name="${esc(group)}-url" value="${esc(option.url)}" ${bookSourceSelection[selectedUrlKey] === option.url ? 'checked' : ''} />
+          <span>${esc(option.label)} <span class="book-source-url">(${esc(option.url)})</span></span>
+        </label>`).join('')}
+      </div>
+    </section>`;
+  container.innerHTML = section('Z-Library', 'zlibrary', 'zlibrary', 'zlibraryUrl')
+    + section('Anna\'s Archive', 'source', 'AnnasArchive', 'sourceUrl');
+  container.querySelectorAll('input[name="active-book-strategy"]').forEach(input => {
+    input.addEventListener('change', () => {
+      bookSourceSelection.strategy = input.value;
+      persistBookSourceSelection();
+    });
+  });
+  container.querySelectorAll('input[name="zlibrary-url"]').forEach(input => {
+    input.addEventListener('change', () => { bookSourceSelection.zlibraryUrl = input.value; persistBookSourceSelection(); });
+  });
+  container.querySelectorAll('input[name="AnnasArchive-url"]').forEach(input => {
+    input.addEventListener('change', () => { bookSourceSelection.sourceUrl = input.value; persistBookSourceSelection(); });
+  });
+}
 
 const SMTP_PROVIDER_PRESETS = {
   custom:   { label: 'Custom', host: '',                        port: 587, secure: false },
@@ -540,28 +616,45 @@ function buildProfileBtns(dl, title, strategy) {
   if (!allProfiles.length) return '';
   const btns = allProfiles.map(p => {
     const tip = `Send to ${p.name}`;
-    return `<button class="profile-btn" data-tip="${esc(tip)}" data-dl="${esc(dl)}" data-strategy="${esc(strategy||'legacy')}" data-title="${esc(title)}" data-pid="${esc(p.id)}" onclick="sendToProfile(event,this)" title="${esc(tip)}">${avatarHtml(p)}<div class="btn-status"></div></button>`;
+    return `<button class="profile-btn" data-tip="${esc(tip)}" data-dl="${esc(dl)}" data-strategy="${esc(strategy||'zlibrary')}" data-title="${esc(title)}" data-pid="${esc(p.id)}" onclick="sendToProfile(event,this)" title="${esc(tip)}">${avatarHtml(p)}<div class="btn-status"></div></button>`;
   }).join('');
   return `<div class="profile-btns">${btns}</div>`;
+}
+
+function makeDownloadUrl(dl, title, strategy) {
+  if (!dl) return '';
+  const params = new URLSearchParams({ dl, title, strategy, ...bookSourceRequestParams() });
+  return `/api/download?${params}`;
+}
+
+function refreshResultDownloadUrls() {
+  if (!bookSourceSelection) return;
+  document.querySelectorAll('.book-row').forEach(row => {
+    row.dataset.dl = makeDownloadUrl(row.dataset.bookId, row.dataset.bookTitle, row.dataset.strategy);
+  });
 }
 
 function renderResults(results) {
   if (!results.length) { setStatus('No EPUB results found.'); resultsEl.innerHTML = ''; return; }
   setStatus('');
   resultsEl.innerHTML = results.map(r => {
-    const dlUrl = r.dl ? `/api/download?dl=${encodeURIComponent(r.dl)}&strategy=${encodeURIComponent(r.strategy||'legacy')}&title=${encodeURIComponent(r.title)}` : '';
+    const strategy = r.strategy || 'zlibrary';
+    const dlUrl = makeDownloadUrl(r.dl, r.title, strategy);
     const cover = r.cover ? `<img class="book-cover" src="${esc(r.cover)}" alt="" loading="lazy" />` : `<div class="book-cover-placeholder">&#128218;</div>`;
     const metaParts = [];
     if (r.year && r.year !== '0') metaParts.push(`Year: <strong>${esc(r.year)}</strong>`);
     if (r.language) metaParts.push(`Language: <strong>${esc(r.language)}</strong>`);
     if (r.filesize) metaParts.push(`File: <strong>${esc((r.extension||'').toUpperCase())}, ${esc(r.filesize)}</strong>`);
-    return `<div class="book-row" data-dl="${esc(dlUrl)}" data-url="${esc(r.url)}" onclick="triggerDownload(this)">
+    return `<div class="book-row" data-book-id="${esc(r.dl||'')}" data-book-title="${esc(r.title)}" data-strategy="${esc(strategy)}" data-dl="${esc(dlUrl)}" data-url="${esc(r.url)}" onclick="triggerDownload(this)">
       ${cover}
       <div class="book-info">
         <div class="book-title">${esc(r.title)}</div>
         ${r.publisher?`<div class="book-publisher">${esc(r.publisher)}</div>`:''}
         ${r.author?`<div class="book-author">${esc(r.author)}</div>`:''}
         <div class="book-meta">${metaParts.map(p=>`<span>${p}</span>`).join('')}${ratingStars(r.rating,r.quality)}</div>
+        <div class="book-status">
+          <div class="book-status-log" aria-live="polite"></div>
+        </div>
       </div>
       <div class="book-actions">
         <a class="open-link" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer" title="Open on Z-Library" onclick="event.stopPropagation()">&#8599;</a>
@@ -580,8 +673,8 @@ function renderProfileBtnsAll() {
     if (!allProfiles.length) return;
     const dlRaw  = row.querySelector('.book-actions')?.closest('.book-row')?.dataset.dl || '';
     let dl = '';
-    let strategy = 'legacy';
-    try { const u = new URL(dlRaw, location.origin); dl = u.searchParams.get('dl') || ''; strategy = u.searchParams.get('strategy') || 'legacy'; } catch(e) {}
+    let strategy = 'zlibrary';
+    try { const u = new URL(dlRaw, location.origin); dl = u.searchParams.get('dl') || ''; strategy = u.searchParams.get('strategy') || 'zlibrary'; } catch(e) {}
     const title = row.querySelector('.book-title')?.textContent || '';
     const wrap = document.createElement('div');
     wrap.className = 'profile-btns';
@@ -604,23 +697,53 @@ function renderProfileBtnsAll() {
 }
 
 function triggerDownload(row) {
+  activateBookStatus(row);
   const dlUrl = row.dataset.dl;
   if (!dlUrl) { window.open(row.dataset.url, '_blank', 'noopener,noreferrer'); return; }
-  row.classList.add('downloading');
   const a = document.createElement('a');
   a.href = dlUrl;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => row.classList.remove('downloading'), 4000);
+}
+
+function activateBookStatus(row) {
+  document.querySelectorAll('.book-row.status-active').forEach(item => {
+    if (item !== row) item.classList.remove('status-active');
+  });
+  row?.classList.add('status-active');
+}
+
+function appendBookLog(bookId, message, type = '') {
+  const row = Array.from(document.querySelectorAll('.book-row'))
+    .find(item => item.dataset.bookId === bookId);
+  const log = row?.querySelector('.book-status-log');
+  if (!log) return;
+  const entry = document.createElement('div');
+  entry.className = 'book-status-entry' + (type ? ` ${type}` : '');
+  const time = document.createElement('time');
+  const now = new Date();
+  time.dateTime = now.toISOString();
+  time.textContent = now.toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const text = document.createElement('span');
+  text.textContent = message;
+  entry.append(time, text);
+  log.appendChild(entry);
 }
 
 async function sendToProfile(evt, btnEl) {
   evt.stopPropagation();
+  activateBookStatus(btnEl.closest('.book-row'));
   const dl = btnEl.dataset.dl, strategy = btnEl.dataset.strategy, title = btnEl.dataset.title, profileId = btnEl.dataset.pid;
   const statusDiv = btnEl.querySelector('.btn-status');
   btnEl.classList.add('sending');
   statusDiv.innerHTML = '<span class="spinner"></span>';
   try {
-    const res  = await fetch('/api/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ dl, strategy, title, profileId }) });
+    const res  = await fetch('/api/send', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ dl, strategy, title, profileId, ...bookSourceRequestParams() }),
+    });
     let data = {};
     try { data = await res.json(); } catch (e) {}
     if (!res.ok || data.error) {
@@ -632,14 +755,13 @@ async function sendToProfile(evt, btnEl) {
     btnEl.classList.remove('sending'); btnEl.classList.add('sent');
     statusDiv.innerHTML = '&#10003;';
     const pName = allProfiles.find(p => p.id === profileId)?.name || 'profile';
-    toast(`Sent to ${pName}!`, 'success');
+    appendBookLog(dl, `Sent to ${pName}!`, 'success');
     setTimeout(() => { btnEl.classList.remove('sent'); statusDiv.innerHTML = ''; }, 3000);
   } catch (err) {
     btnEl.classList.remove('sending'); btnEl.classList.add('failed');
     statusDiv.innerHTML = '&#10007;';
     const prefix = err.retrySuggested ? 'Temporary source error: ' : 'Failed: ';
-    showSendError(prefix + err.message, err.htmlPreviewId || null);
-    toast(err.retrySuggested ? 'Source returned 503. Browser session restarted; try again.' : 'Failed: ' + err.message, 'error');
+    appendBookLog(dl, prefix + err.message, 'error');
     setTimeout(() => { btnEl.classList.remove('failed'); statusDiv.innerHTML = ''; }, 4000);
   }
 }
@@ -658,7 +780,7 @@ function connectDownloadProgress() {
       download_finished: 'Book download finished.',
     };
     const message = messages[update.stage];
-    if (message) toast(message, update.stage === 'download_finished' ? 'success' : '');
+    if (message) appendBookLog(update.bookId, message, update.stage === 'download_finished' ? 'success' : '');
   });
   socket.addEventListener('close', () => setTimeout(connectDownloadProgress, 2000));
 }
@@ -675,7 +797,9 @@ form.addEventListener('submit', async (e) => {
   statusEl.innerHTML = '<span class="spinner-lg"></span>Searching\u2026';
   statusEl.hidden = false; statusEl.className = '';
   try {
-    const res  = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    await loadBookSources();
+    const params = new URLSearchParams({ q, ...bookSourceRequestParams() });
+    const res  = await fetch(`/api/search?${params}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     renderResults(data.results || []);
@@ -703,11 +827,11 @@ document.querySelectorAll('.panel-tab').forEach(tab => {
 });
 
 async function refreshSettings() {
-  await loadSenders();
-  await loadProfiles();
+  await Promise.all([loadSenders(), loadProfiles(), loadBookSources()]);
   renderSendersList();
   renderProfilesList();
   populateSenderDropdown();
+  renderBookSources();
 }
 
 /* ─── Senders ────────────────────────────────────────────────────────────── */
