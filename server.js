@@ -8,25 +8,22 @@ const nodemailer = require('nodemailer');
 const multer     = require('multer');
 const { WebSocketServer, WebSocket } = require('ws');
 const { v4: uuidv4 } = require('uuid');
-const { ZLibraryStrategy, AnnasArchiveStrategy, normalizeSource } = require('./download-strategies');
+const { ZLibraryStrategy, AnnasArchiveStrategy } = require('./download-strategies');
 
 const app      = express();
 const PORT     = 3000;
-const PRIMARY_BASE_URL = 'https://articles.sk';
-const FALLBACK_BASE_URL = 'https://1lib.sk';
-// Optional source hostname override. Leave null/empty to use process.env.SOURCE.
-const SOURCE = 'annas-archive.gl';
-const CONFIGURED_SOURCE = String(SOURCE || process.env.SOURCE || '').trim();
 
 // Developer-configurable book source choices. URLs exposed in Settings and
 // accepted from clients must be declared here.
 const BOOK_SOURCE_OPTIONS = {
   zlibrary: [
-    { label: 'articles.sk', url: PRIMARY_BASE_URL },
-    { label: '1lib.sk', url: FALLBACK_BASE_URL },
+    { label: 'articles.sk', url: 'https://articles.sk' },
+    { label: '1lib.sk', url: 'https://1lib.sk' },
   ],
   AnnasArchive: [
-    { label: CONFIGURED_SOURCE || 'annas-archive.gl', url: normalizeSource(CONFIGURED_SOURCE || 'annas-archive.gl') },
+    { label: 'annas-archive.gl', url: 'https://annas-archive.gl' },
+    { label: 'annas-archive.pk', url: 'https://annas-archive.pk' },
+    { label: 'annas-archive.gd', url: 'https://annas-archive.gd' },
   ],
 };
 
@@ -188,7 +185,7 @@ async function fetchDownloadFromBase(dlPath, baseUrl, cookieStr) {
   });
 }
 
-async function downloadToBuffer(dlPath, _title = '', baseUrl = PRIMARY_BASE_URL) {
+async function downloadToBuffer(dlPath, _title = '', baseUrl) {
   if (!dlPath || !/^\/dl\/[A-Za-z0-9_-]+$/.test(dlPath)) throw new Error('Invalid download path');
 
   const cookieStr = await getSkCookies();
@@ -231,7 +228,7 @@ function buildTransport(sender) {
 // SEARCH & DOWNLOAD strategies
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function zLibrarySearch(query, baseUrl = PRIMARY_BASE_URL) {
+async function zLibrarySearch(query, baseUrl) {
   let page;
   try {
     const b = await getBrowser();
@@ -276,7 +273,6 @@ const downloadStrategies = new Map();
 const zLibraryStrategy = new ZLibraryStrategy({ search: zLibrarySearch, download: downloadToBuffer });
 downloadStrategies.set(zLibraryStrategy.name, zLibraryStrategy);
 const sourceStrategy = new AnnasArchiveStrategy({
-  source: BOOK_SOURCE_OPTIONS.AnnasArchive[0].url,
   getBrowser,
   fetchWithRedirects,
   onProgress: broadcastDownloadProgress,
@@ -292,7 +288,13 @@ function strategyFor(name, dl) {
 function allowedBookSourceUrl(group, requestedUrl) {
   const options = BOOK_SOURCE_OPTIONS[group] || [];
   const requested = String(requestedUrl || '').trim();
-  return options.find(option => option.url === requested)?.url || options[0]?.url;
+  const selected = options.find(option => option.url === requested);
+  if (!selected) {
+    const err = new Error(`Missing or invalid ${group} URL`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return selected.url;
 }
 
 function requestedBookSources(input) {
@@ -315,14 +317,13 @@ app.get('/api/search', async (req, res) => {
     res.json({ results: await strategy.search(query, { baseUrl }) });
   } catch (err) {
     console.error('Search error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
 app.get('/api/download', async (req, res) => {
   const dlPath = req.query.dl;
   const strategy = strategyFor(req.query.strategy, dlPath);
-  const sources = requestedBookSources(req.query);
   const title  = (req.query.title || 'ebook').trim();
 
   if (!strategy) {
@@ -331,6 +332,7 @@ app.get('/api/download', async (req, res) => {
   const safeName = title.replace(/[^\w\s\-()']/g, '').trim().replace(/\s+/g, '_').substring(0, 100) || 'ebook';
 
   try {
+    const sources = requestedBookSources(req.query);
     const baseUrl = strategy.name === 'zlibrary' ? sources.zlibraryUrl : sources.sourceUrl;
     const download = await strategy.download(dlPath, title, { baseUrl });
     res.setHeader('Content-Type', download.contentType || 'application/epub+zip');
@@ -353,7 +355,7 @@ app.get('/api/download', async (req, res) => {
           puppeteerRestarted: true,
         });
       }
-      res.status(500).json({ error: err.message });
+      res.status(err.statusCode || 500).json({ error: err.message });
     }
   }
 });
@@ -542,9 +544,9 @@ app.post('/api/send', async (req, res) => {
   const safeName = (title || 'ebook').replace(/[^\w\s\-()']/g, '').trim().replace(/\s+/g, '_').substring(0, 100) || 'ebook';
   const strategy = strategyFor(strategyName, dl);
   if (!strategy) return res.status(400).json({ error: 'Invalid download id or strategy' });
-  const sources = requestedBookSources(req.body);
 
   try {
+    const sources = requestedBookSources(req.body);
     console.log(`Sending "${safeName}.epub" to ${profile.destEmail} via ${sender.user}…`);
     const baseUrl = strategy.name === 'zlibrary' ? sources.zlibraryUrl : sources.sourceUrl;
     const download  = await strategy.download(dl, title || '', { baseUrl });
@@ -577,7 +579,7 @@ app.post('/api/send', async (req, res) => {
         puppeteerRestarted: true,
       });
     }
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 

@@ -52,9 +52,8 @@ class ZLibraryStrategy extends BookDownloadStrategy {
 }
 
 class AnnasArchiveStrategy extends BookDownloadStrategy {
-  constructor({ source, getBrowser, fetchWithRedirects, onProgress = () => {} }) {
+  constructor({ getBrowser, fetchWithRedirects, onProgress = () => {} }) {
     super('source');
-    this.baseUrl = normalizeSource(source);
     this.getBrowser = getBrowser;
     this.fetchWithRedirects = fetchWithRedirects;
     this.onProgress = onProgress;
@@ -71,7 +70,7 @@ class AnnasArchiveStrategy extends BookDownloadStrategy {
   }
 
   async search(query, options = {}) {
-    const baseUrl = normalizeSource(options.baseUrl || this.baseUrl);
+    const baseUrl = normalizeSource(options.baseUrl);
     let page;
     try {
       page = await this.newPage();
@@ -90,7 +89,7 @@ class AnnasArchiveStrategy extends BookDownloadStrategy {
 
   async download(id, _title, options = {}) {
     if (!this.isValidDownloadId(id)) throw new Error('Invalid download id');
-    const baseUrl = normalizeSource(options.baseUrl || this.baseUrl);
+    const baseUrl = normalizeSource(options.baseUrl);
     let page;
     try {
       page = await this.newPage();
@@ -209,11 +208,11 @@ class AnnasArchiveStrategy extends BookDownloadStrategy {
 
 function normalizeSource(source) {
   const raw = String(source || '').trim();
-  if (!raw) throw new Error('SOURCE is required for the source download strategy');
+  if (!raw) throw new Error('A source URL is required');
   const url = new URL(raw.includes('://') ? raw : `https://${raw}`);
-  if (url.protocol !== 'https:') throw new Error('SOURCE must use HTTPS');
+  if (url.protocol !== 'https:') throw new Error('Source URL must use HTTPS');
   if (url.username || url.password || url.search || url.hash || (url.pathname && url.pathname !== '/')) {
-    throw new Error('SOURCE must be a hostname, without a path, query, or credentials');
+    throw new Error('Source URL must be a hostname, without a path, query, or credentials');
   }
   return url.origin;
 }

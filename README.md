@@ -15,14 +15,6 @@ Simple web app to search EPUB books and send them to your ebook device via email
    ```
 3. Open: http://localhost:3000
 
-Set `SOURCE` to the hostname of an Anna's Archive-compatible source to use the
-search and slow-download strategy (for example, `SOURCE=example.org`). Without
-`SOURCE`, Easereader keeps using its original search/download strategy.
-
-You can also set the `SOURCE` constant near the top of `server.js`. A non-empty
-constant takes precedence over the environment variable; leave it empty or
-`null` to use `process.env.SOURCE`.
-
 Selectable source URLs are defined in `BOOK_SOURCE_OPTIONS` near the top of
 `server.js`. Add or remove `{ label, url }` entries there to change the choices
 shown under Settings > Book sources. The browser stores the active strategy and
