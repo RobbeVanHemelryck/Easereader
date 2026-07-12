@@ -536,11 +536,11 @@ function ratingStars(rating, quality) {
   return `<div class="book-rating"><span class="${r>0?'star-icon':'star-icon empty'}">${r>=1?'&#9733;':'&#9734;'}</span><span class="rating-text">${r.toFixed(1)} / ${q.toFixed(1)}</span></div>`;
 }
 
-function buildProfileBtns(dl, title) {
+function buildProfileBtns(dl, title, strategy) {
   if (!allProfiles.length) return '';
   const btns = allProfiles.map(p => {
     const tip = `Send to ${p.name}`;
-    return `<button class="profile-btn" data-tip="${esc(tip)}" data-dl="${esc(dl)}" data-title="${esc(title)}" data-pid="${esc(p.id)}" onclick="sendToProfile(event,this)" title="${esc(tip)}">${avatarHtml(p)}<div class="btn-status"></div></button>`;
+    return `<button class="profile-btn" data-tip="${esc(tip)}" data-dl="${esc(dl)}" data-strategy="${esc(strategy||'legacy')}" data-title="${esc(title)}" data-pid="${esc(p.id)}" onclick="sendToProfile(event,this)" title="${esc(tip)}">${avatarHtml(p)}<div class="btn-status"></div></button>`;
   }).join('');
   return `<div class="profile-btns">${btns}</div>`;
 }
@@ -549,7 +549,7 @@ function renderResults(results) {
   if (!results.length) { setStatus('No EPUB results found.'); resultsEl.innerHTML = ''; return; }
   setStatus('');
   resultsEl.innerHTML = results.map(r => {
-    const dlUrl = r.dl ? `/api/download?dl=${encodeURIComponent(r.dl)}&title=${encodeURIComponent(r.title)}` : '';
+    const dlUrl = r.dl ? `/api/download?dl=${encodeURIComponent(r.dl)}&strategy=${encodeURIComponent(r.strategy||'legacy')}&title=${encodeURIComponent(r.title)}` : '';
     const cover = r.cover ? `<img class="book-cover" src="${esc(r.cover)}" alt="" loading="lazy" />` : `<div class="book-cover-placeholder">&#128218;</div>`;
     const metaParts = [];
     if (r.year && r.year !== '0') metaParts.push(`Year: <strong>${esc(r.year)}</strong>`);
@@ -565,7 +565,7 @@ function renderResults(results) {
       </div>
       <div class="book-actions">
         <a class="open-link" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer" title="Open on Z-Library" onclick="event.stopPropagation()">&#8599;</a>
-        ${buildProfileBtns(r.dl, r.title)}
+        ${buildProfileBtns(r.dl, r.title, r.strategy)}
       </div>
     </div>`;
   }).join('');
@@ -580,7 +580,8 @@ function renderProfileBtnsAll() {
     if (!allProfiles.length) return;
     const dlRaw  = row.querySelector('.book-actions')?.closest('.book-row')?.dataset.dl || '';
     let dl = '';
-    try { dl = new URL(dlRaw, location.origin).searchParams.get('dl') || ''; } catch(e) {}
+    let strategy = 'legacy';
+    try { const u = new URL(dlRaw, location.origin); dl = u.searchParams.get('dl') || ''; strategy = u.searchParams.get('strategy') || 'legacy'; } catch(e) {}
     const title = row.querySelector('.book-title')?.textContent || '';
     const wrap = document.createElement('div');
     wrap.className = 'profile-btns';
@@ -590,6 +591,7 @@ function renderProfileBtnsAll() {
       b.className = 'profile-btn';
       b.dataset.tip   = tip;
       b.dataset.dl    = dl;
+      b.dataset.strategy = strategy;
       b.dataset.title = title;
       b.dataset.pid   = p.id;
       b.title = tip;
@@ -613,12 +615,12 @@ function triggerDownload(row) {
 
 async function sendToProfile(evt, btnEl) {
   evt.stopPropagation();
-  const dl = btnEl.dataset.dl, title = btnEl.dataset.title, profileId = btnEl.dataset.pid;
+  const dl = btnEl.dataset.dl, strategy = btnEl.dataset.strategy, title = btnEl.dataset.title, profileId = btnEl.dataset.pid;
   const statusDiv = btnEl.querySelector('.btn-status');
   btnEl.classList.add('sending');
   statusDiv.innerHTML = '<span class="spinner"></span>';
   try {
-    const res  = await fetch('/api/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ dl, title, profileId }) });
+    const res  = await fetch('/api/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ dl, strategy, title, profileId }) });
     let data = {};
     try { data = await res.json(); } catch (e) {}
     if (!res.ok || data.error) {
@@ -641,6 +643,27 @@ async function sendToProfile(evt, btnEl) {
     setTimeout(() => { btnEl.classList.remove('failed'); statusDiv.innerHTML = ''; }, 4000);
   }
 }
+
+function connectDownloadProgress() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(`${protocol}//${location.host}/ws/download-progress`);
+  socket.addEventListener('message', event => {
+    let update;
+    try { update = JSON.parse(event.data); } catch (_) { return; }
+    if (update.type !== 'download_progress') return;
+    const messages = {
+      download_page_loaded: 'Download page loaded.',
+      timer: `Download available in ${update.waitSeconds} second${update.waitSeconds === 1 ? '' : 's'}.`,
+      download_started: 'Book download started.',
+      download_finished: 'Book download finished.',
+    };
+    const message = messages[update.stage];
+    if (message) toast(message, update.stage === 'download_finished' ? 'success' : '');
+  });
+  socket.addEventListener('close', () => setTimeout(connectDownloadProgress, 2000));
+}
+
+connectDownloadProgress();
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();

@@ -6,13 +6,18 @@ const http       = require('http');
 const fs         = require('fs');
 const nodemailer = require('nodemailer');
 const multer     = require('multer');
+const { WebSocketServer, WebSocket } = require('ws');
 const { v4: uuidv4 } = require('uuid');
+const { LegacyBookDownloadStrategy, SourceBookDownloadStrategy } = require('./download-strategies');
 
 const app      = express();
 const PORT     = 3000;
 const PRIMARY_BASE_URL = 'https://articles.sk';
 const FALLBACK_BASE_URL = 'https://1lib.sk';
 const DOWNLOAD_BASE_URLS = [PRIMARY_BASE_URL, FALLBACK_BASE_URL];
+// Optional source hostname override. Leave null/empty to use process.env.SOURCE.
+const SOURCE = 'annas-archive.gl';
+const CONFIGURED_SOURCE = String(SOURCE || process.env.SOURCE || '').trim();
 
 const DATA_DIR     = process.env.CONFIG_DIR || path.join(__dirname, 'data');
 const UPLOADS_DIR  = path.join(DATA_DIR, 'uploads');
@@ -52,7 +57,16 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 
 // ── Puppeteer browser ────────────────────────────────────────────────────────
 let browser = null;
+let progressWebSocketServer = null;
 const htmlPreviews = new Map();
+
+function broadcastDownloadProgress(event) {
+  if (!progressWebSocketServer) return;
+  const payload = JSON.stringify({ type: 'download_progress', timestamp: new Date().toISOString(), ...event });
+  for (const client of progressWebSocketServer.clients) {
+    if (client.readyState === WebSocket.OPEN) client.send(payload);
+  }
+}
 
 function storeHtmlPreview(html, contentType = 'text/html') {
   const id = uuidv4();
@@ -271,13 +285,10 @@ function buildTransport(sender) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SEARCH & DOWNLOAD (existing)
+// SEARCH & DOWNLOAD strategies
 // ═══════════════════════════════════════════════════════════════════════════
 
-app.get('/api/search', async (req, res) => {
-  const query = (req.query.q || '').trim();
-  if (!query) return res.json({ results: [] });
-
+async function legacySearch(query) {
   let page;
   try {
     const b = await getBrowser();
@@ -312,26 +323,54 @@ app.get('/api/search', async (req, res) => {
         });
     }, PRIMARY_BASE_URL);
 
-    res.json({ results });
+    return results.map(result => ({ ...result, strategy: 'legacy' }));
+  } finally {
+    if (page) await page.close().catch(() => {});
+  }
+}
+
+const downloadStrategies = new Map();
+const legacyStrategy = new LegacyBookDownloadStrategy({ search: legacySearch, download: downloadToBuffer });
+downloadStrategies.set(legacyStrategy.name, legacyStrategy);
+if (CONFIGURED_SOURCE) {
+  const sourceStrategy = new SourceBookDownloadStrategy({
+    source: CONFIGURED_SOURCE,
+    getBrowser,
+    fetchWithRedirects,
+    onProgress: broadcastDownloadProgress,
+  });
+  downloadStrategies.set(sourceStrategy.name, sourceStrategy);
+}
+const activeSearchStrategy = downloadStrategies.get('source') || legacyStrategy;
+
+function strategyFor(name, dl) {
+  const strategy = downloadStrategies.get(name || (/^\/dl\//.test(dl || '') ? 'legacy' : 'source'));
+  return strategy && strategy.isValidDownloadId(dl) ? strategy : null;
+}
+
+app.get('/api/search', async (req, res) => {
+  const query = (req.query.q || '').trim();
+  if (!query) return res.json({ results: [] });
+  try {
+    res.json({ results: await activeSearchStrategy.search(query) });
   } catch (err) {
     console.error('Search error:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    if (page) await page.close().catch(() => {});
   }
 });
 
 app.get('/api/download', async (req, res) => {
   const dlPath = req.query.dl;
+  const strategy = strategyFor(req.query.strategy, dlPath);
   const title  = (req.query.title || 'ebook').trim();
 
-  if (!dlPath || !/^\/dl\/[A-Za-z0-9_-]+$/.test(dlPath)) {
+  if (!strategy) {
     return res.status(400).json({ error: 'Invalid download path' });
   }
   const safeName = title.replace(/[^\w\s\-()']/g, '').trim().replace(/\s+/g, '_').substring(0, 100) || 'ebook';
 
   try {
-    const download = await downloadToBuffer(dlPath, title);
+    const download = await strategy.download(dlPath, title);
     res.setHeader('Content-Type', download.contentType || 'application/epub+zip');
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}.epub"`);
     res.setHeader('Content-Length', String(download.buffer.length));
@@ -528,7 +567,7 @@ app.delete('/api/profiles/:id', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 app.post('/api/send', async (req, res) => {
-  const { dl, title, profileId } = req.body;
+  const { dl, title, profileId, strategy: strategyName } = req.body;
   if (!dl || !profileId) return res.status(400).json({ error: 'dl and profileId are required' });
 
   const profiles = readJSON(PROFILES_FILE);
@@ -540,10 +579,12 @@ app.post('/api/send', async (req, res) => {
   if (!sender)  return res.status(404).json({ error: 'Sender not found' });
 
   const safeName = (title || 'ebook').replace(/[^\w\s\-()']/g, '').trim().replace(/\s+/g, '_').substring(0, 100) || 'ebook';
+  const strategy = strategyFor(strategyName, dl);
+  if (!strategy) return res.status(400).json({ error: 'Invalid download id or strategy' });
 
   try {
     console.log(`Sending "${safeName}.epub" to ${profile.destEmail} via ${sender.user}…`);
-    const download  = await downloadToBuffer(dl, title || '');
+    const download  = await strategy.download(dl, title || '');
     const buffer    = download.buffer;
 
     const transport = buildTransport(sender);
@@ -591,7 +632,11 @@ app.get('/api/debug/html/:id', (req, res) => {
 // START
 // ═══════════════════════════════════════════════════════════════════════════
 
-app.listen(PORT, () => console.log(`Ebook search running at http://localhost:${PORT}`));
+const server = app.listen(PORT, () => console.log(`Ebook search running at http://localhost:${PORT}`));
+progressWebSocketServer = new WebSocketServer({ server, path: '/ws/download-progress' });
+progressWebSocketServer.on('connection', socket => {
+  socket.send(JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() }));
+});
 
 process.on('SIGINT', async () => {
   if (browser) await browser.close();
