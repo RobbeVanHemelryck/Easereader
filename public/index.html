@@ -237,9 +237,13 @@
     .provider-preset:hover { background: #f2f7fc; border-color: #bfd8ef; }
     .provider-preset.active { background: #eaf4fd; border-color: #2878c3; color: #1f5e98; }
 
-    .book-source-section { border: 1px solid #e2e2e2; border-radius: 8px; padding: 0.9rem; background: #fafafa; }
+    .book-source-section { border: 1px solid #e2e2e2; border-radius: 8px; padding: 0.9rem; background: #fafafa; cursor: pointer; transition: background 0.15s, border-color 0.15s, box-shadow 0.15s; }
+    .book-source-section:hover { border-color: #c7d7ca; }
+    .book-source-section.active { background: #eef8f0; border-color: #9fcaaa; box-shadow: 0 0 0 1px rgba(65, 145, 83, 0.08); }
+    .book-source-section:focus-visible { outline: 2px solid #2878c3; outline-offset: 2px; }
     .book-source-section + .book-source-section { margin-top: 0.85rem; }
-    .book-source-heading { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; color: #333; margin-bottom: 0.7rem; }
+    .book-source-heading { font-weight: 700; color: #333; }
+    .book-source-description { margin: 0.3rem 0 0.7rem; color: #777; font-size: 0.77rem; line-height: 1.4; }
     .book-source-options { display: flex; flex-direction: column; gap: 0.45rem; }
     .book-source-option { display: flex; align-items: center; gap: 0.5rem; font-size: 0.83rem; color: #555; cursor: pointer; }
     .book-source-url { color: #777; word-break: break-all; }
@@ -328,9 +332,9 @@
 
     <div class="panel-tabs">
       <button class="panel-tab" data-tab="info">How it works</button>
+      <button class="panel-tab" data-tab="book-sources">Book sources</button>
       <button class="panel-tab active" data-tab="senders">Senders</button>
       <button class="panel-tab" data-tab="profiles">Profiles</button>
-      <button class="panel-tab" data-tab="book-sources">Book sources</button>
     </div>
 
     <!-- ── SENDERS PANE ─────────────────────────────────────────────────── -->
@@ -430,6 +434,9 @@
           Many providers require approved senders, so the sender address you use here may need to be whitelisted in your device account settings.
         </div>
         <div class="help-text" style="font-size:0.85rem;color:#555">
+          Book sources let you choose which service and URL Easereader uses to search for and download books.
+        </div>
+        <div class="help-text" style="font-size:0.85rem;color:#555">
           Setup flow:
         </div>
         <div class="help-text" style="font-size:0.85rem;color:#555">
@@ -514,6 +521,7 @@ let selectedProviderPreset = 'custom';
 let editingSenderId = null;
 let editingProfileId = null;
 const BOOK_SOURCE_STORAGE_KEY = 'easereader.bookSources';
+const DEFAULT_BOOK_SOURCE_STRATEGY = 'source'; // Second option: Anna's Archive
 let bookSourceOptions = null;
 let bookSourceSelection = null;
 
@@ -527,7 +535,7 @@ async function loadBookSources() {
   const zlibraryUrls = bookSourceOptions.zlibrary || [];
   const sourceUrls = bookSourceOptions.AnnasArchive || [];
   bookSourceSelection = {
-    strategy: ['zlibrary', 'source'].includes(stored.strategy) ? stored.strategy : 'source',
+    strategy: ['zlibrary', 'source'].includes(stored.strategy) ? stored.strategy : DEFAULT_BOOK_SOURCE_STRATEGY,
     zlibraryUrl: zlibraryUrls.some(item => item.url === stored.zlibraryUrl) ? stored.zlibraryUrl : zlibraryUrls[0]?.url || '',
     sourceUrl: sourceUrls.some(item => item.url === stored.sourceUrl) ? stored.sourceUrl : sourceUrls[0]?.url || '',
   };
@@ -546,12 +554,10 @@ function bookSourceRequestParams() {
 function renderBookSources() {
   const container = document.getElementById('book-sources-config');
   if (!container || !bookSourceOptions || !bookSourceSelection) return;
-  const section = (title, strategy, group, selectedUrlKey) => `
-    <section class="book-source-section">
-      <label class="book-source-heading">
-        <input type="radio" name="active-book-strategy" value="${esc(strategy)}" ${bookSourceSelection.strategy === strategy ? 'checked' : ''} />
-        ${esc(title)}
-      </label>
+  const section = (title, description, strategy, group, selectedUrlKey) => `
+    <section class="book-source-section${bookSourceSelection.strategy === strategy ? ' active' : ''}" data-strategy="${esc(strategy)}" role="radio" aria-checked="${bookSourceSelection.strategy === strategy}" tabindex="0">
+      <div class="book-source-heading">${esc(title)}</div>
+      <div class="book-source-description">${esc(description)}</div>
       <div class="book-source-options">
         ${(bookSourceOptions[group] || []).map(option => `<label class="book-source-option">
           <input type="radio" name="${esc(group)}-url" value="${esc(option.url)}" ${bookSourceSelection[selectedUrlKey] === option.url ? 'checked' : ''} />
@@ -559,19 +565,23 @@ function renderBookSources() {
         </label>`).join('')}
       </div>
     </section>`;
-  container.innerHTML = section('Z-Library', 'zlibrary', 'zlibrary', 'zlibraryUrl')
-    + section('Anna\'s Archive', 'source', 'AnnasArchive', 'sourceUrl');
-  container.querySelectorAll('input[name="active-book-strategy"]').forEach(input => {
-    input.addEventListener('change', () => {
-      bookSourceSelection.strategy = input.value;
+  container.innerHTML = section('Z-Library', 'Much faster, but less stable', 'zlibrary', 'zlibrary', 'zlibraryUrl')
+    + section('Anna\'s Archive', 'Possibly requires waiting for a timer to pass, and much slower downloads. Much more stable though.', 'source', 'AnnasArchive', 'sourceUrl');
+  container.querySelectorAll('.book-source-section').forEach(sourceSection => {
+    const select = target => {
+      if (target?.name === 'zlibrary-url') bookSourceSelection.zlibraryUrl = target.value;
+      if (target?.name === 'AnnasArchive-url') bookSourceSelection.sourceUrl = target.value;
+      bookSourceSelection.strategy = sourceSection.dataset.strategy;
       persistBookSourceSelection();
+      renderBookSources();
+    };
+    sourceSection.addEventListener('click', event => select(event.target));
+    sourceSection.addEventListener('keydown', event => {
+      if (event.target === sourceSection && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        select();
+      }
     });
-  });
-  container.querySelectorAll('input[name="zlibrary-url"]').forEach(input => {
-    input.addEventListener('change', () => { bookSourceSelection.zlibraryUrl = input.value; persistBookSourceSelection(); });
-  });
-  container.querySelectorAll('input[name="AnnasArchive-url"]').forEach(input => {
-    input.addEventListener('change', () => { bookSourceSelection.sourceUrl = input.value; persistBookSourceSelection(); });
   });
 }
 
