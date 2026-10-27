@@ -62,8 +62,7 @@ const upload = multer({
 
 // ── Middleware ───────────────────────────────────────────────────────────────
 app.use(express.json());
-// The legacy frontend was deliberately removed. A future UI can consume the
-// JSON API below and may be hosted separately or mounted here later.
+// The frontend build is served after the API routes below.
 app.use('/uploads', express.static(UPLOADS_DIR));
 
 // ── Puppeteer browser ────────────────────────────────────────────────────────
