@@ -41,3 +41,11 @@ Run the backend integration tests with `npm test`. In `frontend/`, run `npm run 
 Open Settings, add an SMTP sender, then add a device profile with its delivery email address. Search for a book and use the profile button to send it. Your reading service may require the sender address to be approved first.
 
 Available book source URLs are defined in `BOOK_SOURCE_OPTIONS` in `server.js`. The backend accepts only URLs listed there.
+
+## Screenshots
+
+Screenshots show an example profile and search results for *Pride and Prejudice*.
+
+![Light mode search](docs/screenshots/search-light.png)
+![Dark mode search](docs/screenshots/search-dark.png)
+![Mobile search](docs/screenshots/search-mobile.png)
