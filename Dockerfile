@@ -46,8 +46,15 @@ COPY package.json package-lock.json ./
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN npm ci --omit=dev
 
+# Install and build frontend dependencies.
+COPY frontend/package.json frontend/package-lock.json ./frontend/
+RUN cd frontend && npm ci
+
 # Copy application source.
 COPY . .
+
+# Build the production frontend bundle.
+RUN cd frontend && npm run build
 
 ENV NODE_ENV=production
 ENV PORT=3000

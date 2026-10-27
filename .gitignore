@@ -1,2 +1,10 @@
 node_modules/
+frontend/node_modules/
+frontend/dist/
 data/
+uploads/
+npm-debug.log*
+*.tsbuildinfo
+.env
+.env.*
+.DS_Store

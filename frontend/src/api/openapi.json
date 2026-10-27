@@ -1,0 +1,472 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Easereader API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "paths": {
+    "/api/book-sources": {
+      "get": {
+        "operationId": "getBookSources",
+        "responses": {
+          "200": {
+            "description": "Allowed book source domains",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookSourceOptions"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/search": {
+      "get": {
+        "operationId": "search",
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" } },
+          { "name": "strategy", "in": "query", "schema": { "type": "string", "enum": ["zlibrary", "source"] } },
+          { "name": "zlibraryUrl", "in": "query", "schema": { "type": "string" } },
+          { "name": "sourceUrl", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "500": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/download": {
+      "get": {
+        "operationId": "download",
+        "parameters": [
+          { "name": "dl", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "title", "in": "query", "schema": { "type": "string" } },
+          { "name": "strategy", "in": "query", "schema": { "type": "string", "enum": ["zlibrary", "source"] } },
+          { "name": "zlibraryUrl", "in": "query", "schema": { "type": "string" } },
+          { "name": "sourceUrl", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "EPUB attachment"
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "429": {
+            "description": "Source returned HTML",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporary upstream failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/send": {
+      "post": {
+        "operationId": "send",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sent successfully",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "429": {
+            "description": "Source returned HTML",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DownloadError" }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporary upstream failure",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DownloadError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/senders": {
+      "get": {
+        "operationId": "getSenders",
+        "responses": {
+          "200": {
+            "description": "List of SMTP senders",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Sender" } }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSender",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SenderInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created sender",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Sender" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/senders/{id}": {
+      "parameters": [
+        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "put": {
+        "operationId": "updateSender",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SenderInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated sender",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Sender" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSender",
+        "responses": {
+          "200": {
+            "description": "Deleted sender",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/senders/{id}/test": {
+      "parameters": [
+        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "post": {
+        "operationId": "testSender",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "destEmail": { "type": "string" } },
+                "required": ["destEmail"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Test email sent",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "500": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/profiles": {
+      "get": {
+        "operationId": "getProfiles",
+        "responses": {
+          "200": {
+            "description": "List of profiles",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Profile" } }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createProfile",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": { "$ref": "#/components/schemas/ProfileInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created profile",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Profile" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/profiles/{id}": {
+      "parameters": [
+        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "put": {
+        "operationId": "updateProfile",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": { "$ref": "#/components/schemas/ProfileInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated profile",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Profile" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteProfile",
+        "responses": {
+          "200": {
+            "description": "Deleted profile",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/debug/html/{id}": {
+      "parameters": [
+        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "get": {
+        "operationId": "getHtmlPreview",
+        "responses": {
+          "200": { "description": "HTML preview" },
+          "404": { "description": "Preview not found or expired" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BookSourceOptions": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": { "type": "string" },
+              "url": { "type": "string" }
+            },
+            "required": ["label", "url"]
+          }
+        }
+      },
+      "SearchResult": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "author": { "type": "string" },
+          "publisher": { "type": "string" },
+          "language": { "type": "string" },
+          "year": { "type": "string" },
+          "extension": { "type": "string" },
+          "filesize": { "type": "string" },
+          "rating": { "type": "string" },
+          "quality": { "type": "string" },
+          "cover": { "type": "string" },
+          "dl": { "type": "string" },
+          "strategy": { "type": "string" },
+          "url": { "type": "string" }
+        },
+        "required": ["title", "dl"]
+      },
+      "SearchResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SearchResult" }
+          }
+        },
+        "required": ["results"]
+      },
+      "SendRequest": {
+        "type": "object",
+        "properties": {
+          "dl": { "type": "string" },
+          "title": { "type": "string" },
+          "profileId": { "type": "string" },
+          "strategy": { "type": "string" },
+          "zlibraryUrl": { "type": "string" },
+          "sourceUrl": { "type": "string" }
+        },
+        "required": ["dl", "profileId", "strategy", "zlibraryUrl", "sourceUrl"]
+      },
+      "Sender": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "user": { "type": "string" },
+          "host": { "type": "string" },
+          "port": { "type": "integer" },
+          "secure": { "type": "boolean" },
+          "password": { "type": "string" }
+        },
+        "required": ["id", "type", "user", "host", "port", "secure"]
+      },
+      "SenderInput": {
+        "type": "object",
+        "properties": {
+          "user": { "type": "string" },
+          "host": { "type": "string" },
+          "port": { "type": "integer" },
+          "secure": { "type": "boolean" },
+          "password": { "type": "string" }
+        },
+        "required": ["user", "host", "password"]
+      },
+      "Profile": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "destEmail": { "type": "string" },
+          "senderId": { "type": "string" },
+          "imagePath": { "type": ["string", "null"] },
+          "senderLabel": { "type": "string" }
+        },
+        "required": ["id", "name", "destEmail", "senderId", "senderLabel"]
+      },
+      "ProfileInput": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "destEmail": { "type": "string" },
+          "senderId": { "type": "string" },
+          "image": { "type": "string", "format": "binary" }
+        },
+        "required": ["name", "destEmail", "senderId"]
+      },
+      "ApiError": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" }
+        },
+        "required": ["error"]
+      },
+      "DownloadError": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "htmlPreviewId": { "type": ["string", "null"] },
+          "retrySuggested": { "type": "boolean" },
+          "puppeteerRestarted": { "type": "boolean" }
+        },
+        "required": ["error"]
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "API error",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ApiError" }
+          }
+        }
+      }
+    }
+  }
+}
