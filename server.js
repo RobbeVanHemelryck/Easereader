@@ -11,14 +11,16 @@ const { v4: uuidv4 } = require('uuid');
 const { ZLibraryStrategy, AnnasArchiveStrategy } = require('./download-strategies');
 
 const app      = express();
-const PORT     = 3000;
+const PORT     = Number(process.env.PORT || 3000);
 
 // Developer-configurable book source choices. URLs exposed in Settings and
 // accepted from clients must be declared here.
 const BOOK_SOURCE_OPTIONS = {
   zlibrary: [
+    { label: 'zlib.bz', url: 'https://zlib.bz' },
     { label: 'articles.sk', url: 'https://articles.sk' },
     { label: '1lib.sk', url: 'https://1lib.sk' },
+    { label: 'z-library.website', url: 'https://z-library.website' },
   ],
   AnnasArchive: [
     { label: 'annas-archive.gl', url: 'https://annas-archive.gl' },
@@ -60,7 +62,8 @@ const upload = multer({
 
 // ── Middleware ───────────────────────────────────────────────────────────────
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// The legacy frontend was deliberately removed. A future UI can consume the
+// JSON API below and may be hosted separately or mounted here later.
 app.use('/uploads', express.static(UPLOADS_DIR));
 
 // ── Puppeteer browser ────────────────────────────────────────────────────────
@@ -146,15 +149,19 @@ function remoteHttpError(statusCode, baseUrl) {
 }
 
 // ── Get cookies from Puppeteer context ───────────────────────────────────────
-async function getSkCookies() {
+async function getSourceCookies(baseUrl) {
   const b = await getBrowser();
   const tmp = await b.newPage();
   try {
     const client = await tmp.createCDPSession();
     const { cookies } = await client.send('Network.getAllCookies');
     await client.detach();
+    const hostname = new URL(baseUrl).hostname;
     return cookies
-      .filter(c => c.domain && c.domain.includes('.sk'))
+      .filter(c => {
+        const domain = (c.domain || '').replace(/^\./, '');
+        return domain && (hostname === domain || hostname.endsWith(`.${domain}`));
+      })
       .map(c => `${c.name}=${c.value}`)
       .join('; ');
   } finally {
@@ -188,7 +195,7 @@ async function fetchDownloadFromBase(dlPath, baseUrl, cookieStr) {
 async function downloadToBuffer(dlPath, _title = '', baseUrl) {
   if (!dlPath || !/^\/dl\/[A-Za-z0-9_-]+$/.test(dlPath)) throw new Error('Invalid download path');
 
-  const cookieStr = await getSkCookies();
+  const cookieStr = await getSourceCookies(baseUrl);
   try {
     const result = await fetchDownloadFromBase(dlPath, baseUrl, cookieStr);
     if (!detectHtmlPayload(result.buffer, result.contentType)) return result;
@@ -403,8 +410,8 @@ app.put('/api/senders/:id', (req, res) => {
 
   const update = { ...req.body };
   delete update.type;
-  // Never let the client blank out a stored secret with the mask
-  SENSITIVE.forEach(k => { if (update[k] === '••••••') delete update[k]; });
+  // Keep the stored secret when an edit form leaves it blank or sends the mask.
+  SENSITIVE.forEach(k => { if (update[k] === '' || update[k] === '••••••') delete update[k]; });
   const next = { ...senders[idx], ...update, id: senders[idx].id, type: 'smtp' };
   if (!next.user || !next.host || !next.password) {
     return res.status(400).json({ error: 'user, host and password are required' });
@@ -592,11 +599,20 @@ app.get('/api/debug/html/:id', (req, res) => {
   res.send(item.html);
 });
 
+// Serve production frontend build if present.
+const frontendDist = path.join(__dirname, 'frontend', 'dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // START
 // ═══════════════════════════════════════════════════════════════════════════
 
-const server = app.listen(PORT, () => console.log(`Ebook search running at http://localhost:${PORT}`));
+const server = app.listen(PORT, () => console.log(`Easereader API running at http://localhost:${PORT}`));
 progressWebSocketServer = new WebSocketServer({ server, path: '/ws/download-progress' });
 progressWebSocketServer.on('connection', socket => {
   socket.send(JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() }));

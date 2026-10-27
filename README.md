@@ -1,51 +1,43 @@
 # Easereader
 
-Simple web app to search EPUB books and send them to your ebook device via email profiles.
+Search for EPUB books and send them to a reading device using an SMTP sender and a device profile. Easereader supports Z-Library and Anna's Archive, and offers light and dark themes.
 
-## Run
+## Run with Docker
 
-### npm start
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-2. Start the app:
-   ```bash
-   npm start
-   ```
-3. Open: http://localhost:3000
+```bash
+docker build -t easereader .
+docker run --rm -p 3000:3000 -v easereader-config:/config easereader
+```
 
-Selectable source URLs are defined in `BOOK_SOURCE_OPTIONS` near the top of
-`server.js`. Add or remove `{ label, url }` entries there to change the choices
-shown under Settings > Book sources. The browser stores the active strategy and
-one selected URL per strategy in local storage.
+Open <http://localhost:3000>. The volume stores senders, profiles and uploaded profile images. SMTP passwords are stored in the configuration directory, so keep backups private.
 
-### Docker (published image)
-1. Pull image:
-   ```bash
-   docker pull taltiko/easereader
-   ```
-2. Run container:
-   ```bash
-   docker run --rm -p 3000:3000 -v easereader-config:/config taltiko/easereader
-   ```
-3. Open: http://localhost:3000
+### Upgrading an existing installation
 
-## Sender/Profile setup
-1. Open Settings.
-2. Add a Sender (SMTP account that sends emails).
-3. Add a Profile (device email + sender to use).
-4. Use profile buttons on search results to send books.
+Back up the existing configuration first. Reuse the same volume or bind mount at `/config` when replacing the image; this keeps senders, profiles, their images and stored passwords. The storage format is unchanged and no data conversion is required. A changed Compose project name can result in a different named volume, so check the actual volume being mounted.
 
-Note: your device/service may require sender whitelisting.
+The active source and selected domains are saved in browser storage. Existing selections are preserved when they remain available in `BOOK_SOURCE_OPTIONS`. Browser storage is tied to the address, so changing host, port or protocol starts with a fresh set of browser preferences. New installations retain the original Anna's Archive default.
 
-## Screenshots
+## Run locally
 
-### Desktop
-![Desktop](docs/desktop.png)
+Install backend dependencies and build the frontend before starting the application:
 
-### Settings
-![Settings](docs/settings.png)
+```bash
+npm ci
+cd frontend
+npm ci
+npm run build
+cd ..
+npm start
+```
 
-### Mobile
-![Mobile](docs/mobile.png)
+Open <http://localhost:3000>. Without the frontend build, the backend API is available but `/` does not serve the app. Data defaults to `data/`; set `CONFIG_DIR` to use another directory and `PORT` to change the listening port.
+
+For frontend development, run the backend with `npm start`, then run `npm run dev` in `frontend/`. Vite serves <http://localhost:5173> and proxies `/api`, `/uploads`, and `/ws/download-progress` to the backend.
+
+Run the backend integration tests with `npm test`. In `frontend/`, run `npm run typecheck`, `npm run lint`, `npm test` and `npm run build`.
+
+## Sender and profile setup
+
+Open Settings, add an SMTP sender, then add a device profile with its delivery email address. Search for a book and use the profile button to send it. Your reading service may require the sender address to be approved first.
+
+Available book source URLs are defined in `BOOK_SOURCE_OPTIONS` in `server.js`. The backend accepts only URLs listed there.

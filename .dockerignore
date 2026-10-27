@@ -1,6 +1,11 @@
 node_modules
+frontend/node_modules
+frontend/dist
 npm-debug.log
 .git
 .gitignore
 data
 uploads
+*.tsbuildinfo
+.env
+.env.*
